@@ -340,6 +340,7 @@ Why this fits sandbox constraints:
 - 2026-02-28: Continued `src/index.js` decomposition by extracting listener wiring (`src/app/wireListeners.js`) and runtime delegation proxies (`src/app/runtimeAdapters.js`), plus dedicated adapter unit coverage.
 - 2026-02-28: `src/index.js` is now a thin bootstrap (`startMainRuntime`), with primary runtime orchestration moved to `src/app/mainRuntime.js`.
 - 2026-02-28: Split runtime bootstrap into `src/app/bootstrapContext.js` + leaner `src/app/mainRuntime.js` to isolate setup state from orchestration/wiring.
+- 2026-02-28: Split `src/app/buildRuntimes.js` into focused builders (`buildCommandRuntime`, `buildNotificationRuntime`, `buildApprovalRuntime`, `buildDiscordRuntime`) to reduce cross-domain coupling.
 
 ## Reference Links
 
