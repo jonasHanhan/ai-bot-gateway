@@ -5,6 +5,7 @@ export interface CliRuntimePaths {
   statePath: string;
   heartbeatPath: string;
   restartRequestPath: string;
+  restartAckPath: string;
 }
 
 export function resolveCliRuntimePaths(cwd: string): CliRuntimePaths {
@@ -12,7 +13,8 @@ export function resolveCliRuntimePaths(cwd: string): CliRuntimePaths {
     configPath: path.resolve(cwd, process.env.CHANNEL_CONFIG_PATH ?? "config/channels.json"),
     statePath: path.resolve(cwd, process.env.STATE_PATH ?? "data/state.json"),
     heartbeatPath: path.resolve(cwd, process.env.DISCORD_HEARTBEAT_PATH ?? "data/bridge-heartbeat.json"),
-    restartRequestPath: path.resolve(cwd, process.env.DISCORD_RESTART_REQUEST_PATH ?? "data/restart-request.json")
+    restartRequestPath: path.resolve(cwd, process.env.DISCORD_RESTART_REQUEST_PATH ?? "data/restart-request.json"),
+    restartAckPath: path.resolve(cwd, process.env.DISCORD_RESTART_ACK_PATH ?? "data/restart-ack.json")
   };
 }
 

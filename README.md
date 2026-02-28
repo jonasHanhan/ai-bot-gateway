@@ -107,3 +107,5 @@ On startup, the bot:
 - `DISCORD_HEARTBEAT_PATH` sets the bridge heartbeat file path (default: `data/bridge-heartbeat.json`).
 - `DISCORD_HEARTBEAT_INTERVAL_MS` sets heartbeat write interval (default: `30000`, min effective `5000`).
 - `DISCORD_RESTART_REQUEST_PATH` sets CLI reload signal file path (default: `data/restart-request.json`).
+- `DISCORD_RESTART_ACK_PATH` sets the host-ack marker path written by supervisor (default: `data/restart-ack.json`).
+- `DISCORD_EXIT_ON_RESTART_ACK=1` lets bridge self-exit after ack marker detection (disabled by default).

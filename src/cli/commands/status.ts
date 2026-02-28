@@ -22,6 +22,7 @@ export async function runStatusCommand(_args: string[], context: CliContext): Pr
       configPath: paths.configPath,
       statePath: paths.statePath,
       restartRequestPath: paths.restartRequestPath,
+      restartAckPath: paths.restartAckPath,
       heartbeatPath: paths.heartbeatPath,
       bindings: stateSummary.bindings,
       heartbeat: heartbeatSummary

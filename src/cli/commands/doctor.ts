@@ -54,7 +54,8 @@ export async function runDoctorCommand(_args: string[], context: CliContext): Pr
       configPath: paths.configPath,
       statePath: paths.statePath,
       heartbeatPath: paths.heartbeatPath,
-      restartRequestPath: paths.restartRequestPath
+      restartRequestPath: paths.restartRequestPath,
+      restartAckPath: paths.restartAckPath
     }
   };
 }

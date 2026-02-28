@@ -9,6 +9,7 @@ set -euo pipefail
 #
 # Env overrides:
 #   RESTART_REQUEST_PATH   (default: data/restart-request.json)
+#   RESTART_ACK_PATH       (default: data/restart-ack.json)
 #   RESTART_POLL_INTERVAL  (seconds, default: 3)
 #   RESTART_MIN_INTERVAL   (seconds, default: 15)
 
@@ -24,6 +25,7 @@ if [[ "$#" -eq 0 ]]; then
 fi
 
 RESTART_REQUEST_PATH="${RESTART_REQUEST_PATH:-data/restart-request.json}"
+RESTART_ACK_PATH="${RESTART_ACK_PATH:-data/restart-ack.json}"
 RESTART_POLL_INTERVAL="${RESTART_POLL_INTERVAL:-3}"
 RESTART_MIN_INTERVAL="${RESTART_MIN_INTERVAL:-15}"
 
@@ -75,6 +77,13 @@ while true; do
       echo "[supervisor] restart request detected at ${RESTART_REQUEST_PATH}"
       last_request_sig="${request_sig}"
       last_restart_epoch="$(date +%s)"
+      mkdir -p "$(dirname "${RESTART_ACK_PATH}")"
+      cat >"${RESTART_ACK_PATH}" <<EOF
+{
+  "acknowledgedAt": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
+  "requestSignature": "${request_sig}"
+}
+EOF
       stop_child
       start_child "$@"
     fi

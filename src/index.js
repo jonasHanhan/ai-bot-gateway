@@ -75,6 +75,8 @@ const attachmentIssueLimitPerTurn =
 const renderVerbosity = normalizeRenderVerbosity(process.env.DISCORD_RENDER_VERBOSITY);
 const heartbeatPath = path.resolve(process.env.DISCORD_HEARTBEAT_PATH ?? "data/bridge-heartbeat.json");
 const restartRequestPath = path.resolve(process.env.DISCORD_RESTART_REQUEST_PATH ?? "data/restart-request.json");
+const restartAckPath = path.resolve(process.env.DISCORD_RESTART_ACK_PATH ?? "data/restart-ack.json");
+const exitOnRestartAck = process.env.DISCORD_EXIT_ON_RESTART_ACK === "1";
 const configuredHeartbeatIntervalMs = Number(process.env.DISCORD_HEARTBEAT_INTERVAL_MS ?? "");
 const heartbeatIntervalMs =
   Number.isFinite(configuredHeartbeatIntervalMs) && configuredHeartbeatIntervalMs >= 5_000
@@ -119,6 +121,8 @@ const pendingApprovals = new Map();
 let nextApprovalToken = 1;
 const processStartedAt = new Date().toISOString();
 let heartbeatTimer = null;
+let shuttingDown = false;
+let restartAckHandled = false;
 const turnRunner = createTurnRunner({
   queues,
   activeTurns,
@@ -187,6 +191,10 @@ process.on("SIGTERM", () => {
 });
 
 async function shutdown(exitCode) {
+  if (shuttingDown) {
+    return;
+  }
+  shuttingDown = true;
   if (heartbeatTimer) {
     clearInterval(heartbeatTimer);
     heartbeatTimer = null;
@@ -200,8 +208,10 @@ async function shutdown(exitCode) {
 
 function startHeartbeatLoop() {
   void writeHeartbeatFile();
+  void maybeHandleRestartAckSignal();
   heartbeatTimer = setInterval(() => {
     void writeHeartbeatFile();
+    void maybeHandleRestartAckSignal();
   }, heartbeatIntervalMs);
   if (typeof heartbeatTimer?.unref === "function") {
     heartbeatTimer.unref();
@@ -216,7 +226,8 @@ async function writeHeartbeatFile() {
       pid: process.pid,
       activeTurns: activeTurns.size,
       pendingApprovals: pendingApprovals.size,
-      restartRequestPath
+      restartRequestPath,
+      restartAckPath
     };
     await fs.mkdir(path.dirname(heartbeatPath), { recursive: true });
     const tempPath = `${heartbeatPath}.tmp`;
@@ -225,6 +236,26 @@ async function writeHeartbeatFile() {
   } catch (error) {
     debugLog("ops", "heartbeat write failed", { message: String(error?.message ?? error) });
   }
+}
+
+async function maybeHandleRestartAckSignal() {
+  if (!exitOnRestartAck || restartAckHandled || shuttingDown) {
+    return;
+  }
+  try {
+    const raw = await fs.readFile(restartAckPath, "utf8");
+    const parsed = JSON.parse(raw);
+    const acknowledgedAt = typeof parsed?.acknowledgedAt === "string" ? parsed.acknowledgedAt : "";
+    if (!acknowledgedAt) {
+      return;
+    }
+    if (new Date(acknowledgedAt).getTime() <= new Date(processStartedAt).getTime()) {
+      return;
+    }
+    restartAckHandled = true;
+    console.log(`restart ack detected at ${restartAckPath}; exiting for host-managed restart`);
+    await shutdown(0);
+  } catch {}
 }
 
 async function handleMessage(message) {

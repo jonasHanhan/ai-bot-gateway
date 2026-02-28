@@ -9,6 +9,7 @@ node_modules/
 data/state.json
 data/restart-request.json
 data/bridge-heartbeat.json
+data/restart-ack.json
 config/channels.json
 *.log
 
