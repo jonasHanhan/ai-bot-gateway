@@ -6,7 +6,12 @@ import {
 } from "../src/codex/approvalPayloads.js";
 import { createServerRequestRuntime } from "../src/approvals/serverRequestRuntime.js";
 
-function createHarness() {
+function createHarness(options: {
+  isGeneralChannel?: () => boolean;
+  channelIsTextBased?: boolean;
+  stateChannelId?: string | null;
+  buildResponseForServerRequestOverride?: ((method: string, params: unknown, decision: string) => unknown) | null;
+} = {}) {
   const pendingApprovals = new Map<string, Record<string, unknown>>();
   const activeTurns = new Map<string, { threadId: string; repoChannelId: string }>();
   const codexRespondCalls: Array<{ id: string; payload: Record<string, unknown> }> = [];
@@ -25,7 +30,7 @@ function createHarness() {
 
   const channel = {
     id: "channel-1",
-    isTextBased: () => true,
+    isTextBased: () => options.channelIsTextBased !== false,
     async send(payload: Record<string, unknown>) {
       approvalMessages.push(payload);
       return approvalMessage;
@@ -54,13 +59,16 @@ function createHarness() {
     },
     state: {
       findConversationChannelIdByCodexThreadId(threadId: string) {
-        return threadId === "thread-1" ? "channel-1" : null;
+        if (threadId !== "thread-1") {
+          return null;
+        }
+        return options.stateChannelId === undefined ? "channel-1" : options.stateChannelId;
       }
     },
     activeTurns,
     pendingApprovals,
     approvalButtonPrefix: "approval:",
-    isGeneralChannel: () => false,
+    isGeneralChannel: options.isGeneralChannel ?? (() => false),
     extractThreadId: (params: Record<string, unknown>) => {
       if (typeof params?.threadId === "string") {
         return params.threadId;
@@ -69,7 +77,7 @@ function createHarness() {
     },
     describeToolRequestUserInput,
     buildApprovalActionRows,
-    buildResponseForServerRequest,
+    buildResponseForServerRequest: options.buildResponseForServerRequestOverride ?? buildResponseForServerRequest,
     truncateStatusText: (text: string, limit: number) => text.slice(0, limit),
     truncateForDiscordMessage: (text: string) => text,
     safeSendToChannel: async (_channel: unknown, text: string) => {
@@ -149,5 +157,69 @@ describe("server request runtime integration", () => {
     expect(harness.codexRespondCalls[0]?.payload).toEqual({ decision: "accept" });
     expect(harness.editedApprovalMessages.length).toBe(1);
     expect(String(harness.editedApprovalMessages[0]?.content ?? "")).toContain("Decision: `accept`");
+  });
+
+  test("declines file change requests in general read-only channel", async () => {
+    const harness = createHarness({
+      isGeneralChannel: () => true
+    });
+
+    await harness.runtime.handleServerRequest({
+      id: "req-4",
+      method: "fileChange/requestApproval",
+      params: { threadId: "thread-1", reason: "write file" }
+    });
+
+    expect(harness.sentWarnings.some((line) => line.includes("Declined file change in #general"))).toBe(true);
+    expect(harness.codexRespondCalls.length).toBe(1);
+    expect(harness.codexRespondCalls[0]?.payload).toEqual({ decision: "decline" });
+  });
+
+  test("responds with fallback when request thread has no mapped channel", async () => {
+    const harness = createHarness({ stateChannelId: null });
+
+    await harness.runtime.handleServerRequest({
+      id: "req-5",
+      method: "commandExecution/requestApproval",
+      params: { threadId: "thread-1", command: "echo hi" }
+    });
+
+    expect(harness.codexRespondCalls.length).toBe(1);
+    expect(harness.codexRespondCalls[0]?.payload).toEqual({ decision: "decline" });
+    expect(harness.approvalMessages.length).toBe(0);
+  });
+
+  test("returns decision fallback for unhandled request method carrying decision", async () => {
+    const harness = createHarness();
+
+    await harness.runtime.handleServerRequest({
+      id: "req-6",
+      method: "unknown/method",
+      params: { decision: "accept" }
+    });
+
+    expect(harness.codexRespondCalls.length).toBe(1);
+    expect(harness.codexRespondCalls[0]?.payload).toEqual({ decision: "decline" });
+  });
+
+  test("returns structured error when approval response builder throws", async () => {
+    const harness = createHarness({
+      buildResponseForServerRequestOverride: () => {
+        throw new Error("response-builder-failed");
+      }
+    });
+    harness.pendingApprovals.set("0002", {
+      requestId: "req-7",
+      method: "item/commandExecution/requestApproval",
+      repoChannelId: "channel-1",
+      threadId: "thread-1",
+      params: { command: "echo hi" },
+      approvalMessageId: null
+    });
+
+    const result = await harness.runtime.applyApprovalDecision("0002", "accept", "<@123>");
+
+    expect(result).toEqual({ ok: false, error: "response-builder-failed" });
+    expect(harness.pendingApprovals.has("0002")).toBe(true);
   });
 });
