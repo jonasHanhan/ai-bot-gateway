@@ -10,8 +10,11 @@ set -euo pipefail
 # Env overrides:
 #   RESTART_REQUEST_PATH   (default: data/restart-request.json)
 #   RESTART_ACK_PATH       (default: data/restart-ack.json)
+#   HEARTBEAT_PATH         (default: data/bridge-heartbeat.json)
 #   RESTART_POLL_INTERVAL  (seconds, default: 3)
 #   RESTART_MIN_INTERVAL   (seconds, default: 15)
+#   RESTART_DRAIN_TIMEOUT  (seconds, default: 120)
+#   RESTART_DRAIN_POLL     (seconds, default: 2)
 
 if [[ "${1:-}" != "--" ]]; then
   echo "Usage: $0 -- <bridge command...>" >&2
@@ -36,8 +39,11 @@ fi
 
 RESTART_REQUEST_PATH="${RESTART_REQUEST_PATH:-data/restart-request.json}"
 RESTART_ACK_PATH="${RESTART_ACK_PATH:-data/restart-ack.json}"
+HEARTBEAT_PATH="${HEARTBEAT_PATH:-data/bridge-heartbeat.json}"
 RESTART_POLL_INTERVAL="${RESTART_POLL_INTERVAL:-3}"
 RESTART_MIN_INTERVAL="${RESTART_MIN_INTERVAL:-15}"
+RESTART_DRAIN_TIMEOUT="${RESTART_DRAIN_TIMEOUT:-120}"
+RESTART_DRAIN_POLL="${RESTART_DRAIN_POLL:-2}"
 
 child_pid=""
 last_request_sig=""
@@ -56,6 +62,33 @@ stop_child() {
     wait "${child_pid}" 2>/dev/null || true
   fi
   child_pid=""
+}
+
+read_active_turns() {
+  if [[ ! -f "${HEARTBEAT_PATH}" ]]; then
+    echo ""
+    return
+  fi
+  sed -n 's/.*"activeTurns"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "${HEARTBEAT_PATH}" | head -n 1
+}
+
+wait_for_turn_drain() {
+  local start_epoch now_epoch waited active_turns
+  start_epoch="$(date +%s)"
+  while true; do
+    active_turns="$(read_active_turns)"
+    if [[ -n "${active_turns}" && "${active_turns}" -eq 0 ]]; then
+      return
+    fi
+    now_epoch="$(date +%s)"
+    waited=$((now_epoch - start_epoch))
+    if (( waited >= RESTART_DRAIN_TIMEOUT )); then
+      echo "[supervisor] drain timeout reached (${RESTART_DRAIN_TIMEOUT}s); forcing restart"
+      return
+    fi
+    echo "[supervisor] restart pending: waiting for active turns to drain (activeTurns=${active_turns:-unknown}, waited=${waited}s)"
+    sleep "${RESTART_DRAIN_POLL}"
+  done
 }
 
 handle_exit() {
@@ -94,6 +127,7 @@ while true; do
   "requestSignature": "${request_sig}"
 }
 EOF
+      wait_for_turn_drain
       stop_child
       start_child "$@"
       rm -f "${RESTART_REQUEST_PATH}" 2>/dev/null || true

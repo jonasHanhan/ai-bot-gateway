@@ -16,4 +16,6 @@ if ! command -v bun >/dev/null 2>&1; then
   exit 1
 fi
 
+cd "${PROJECT_ROOT}"
+export DISCORD_BRIDGE_ROOT="${PROJECT_ROOT}"
 exec bun run "${PROJECT_ROOT}/src/cli/index.ts" "$@"

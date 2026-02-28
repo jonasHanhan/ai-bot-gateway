@@ -76,6 +76,9 @@ const renderVerbosity = normalizeRenderVerbosity(process.env.DISCORD_RENDER_VERB
 const heartbeatPath = path.resolve(process.env.DISCORD_HEARTBEAT_PATH ?? "data/bridge-heartbeat.json");
 const restartRequestPath = path.resolve(process.env.DISCORD_RESTART_REQUEST_PATH ?? "data/restart-request.json");
 const restartAckPath = path.resolve(process.env.DISCORD_RESTART_ACK_PATH ?? "data/restart-ack.json");
+const restartNoticePath = path.resolve(
+  process.env.DISCORD_RESTART_NOTICE_PATH ?? "data/restart-discord-notice.json"
+);
 const exitOnRestartAck = process.env.DISCORD_EXIT_ON_RESTART_ACK === "1";
 const configuredHeartbeatIntervalMs = Number(process.env.DISCORD_HEARTBEAT_INTERVAL_MS ?? "");
 const heartbeatIntervalMs =
@@ -132,7 +135,8 @@ const turnRunner = createTurnRunner({
   safeReply,
   buildSandboxPolicyForTurn,
   isThreadNotFoundError,
-  finalizeTurn
+  finalizeTurn,
+  onActiveTurnsChanged: () => writeHeartbeatFile()
 });
 
 codex.on("stderr", (line) => {
@@ -173,6 +177,7 @@ await fs.mkdir(generalChannelCwd, { recursive: true }).catch((error) => {
 await discord.login(discordToken);
 await discord.application?.fetch().catch(() => null);
 await waitForDiscordReady(discord);
+await maybeCompletePendingRestartNotice();
 try {
   const bootstrapSummary = await bootstrapChannelMappings();
   console.log(
@@ -258,6 +263,72 @@ async function maybeHandleRestartAckSignal() {
   } catch {}
 }
 
+async function requestSelfRestartFromDiscord(message, reason) {
+  const status = await safeReply(message, "🔄 Restart requested. I will confirm here when I am back.");
+  if (!status) {
+    return;
+  }
+  const normalizedReason = truncateStatusText(typeof reason === "string" ? reason : "", 200) || "discord restart request";
+  const requestPayload = {
+    requestedAt: new Date().toISOString(),
+    requestedBy: "discord",
+    pid: process.pid,
+    channelId: status.channelId,
+    statusMessageId: status.id,
+    reason: normalizedReason
+  };
+  await fs.mkdir(path.dirname(restartNoticePath), { recursive: true });
+  await fs.writeFile(restartNoticePath, JSON.stringify(requestPayload, null, 2), "utf8");
+  await fs.mkdir(path.dirname(restartRequestPath), { recursive: true });
+  await fs.writeFile(restartRequestPath, JSON.stringify(requestPayload, null, 2), "utf8");
+}
+
+async function maybeCompletePendingRestartNotice() {
+  let pending;
+  try {
+    const raw = await fs.readFile(restartNoticePath, "utf8");
+    pending = JSON.parse(raw);
+  } catch {
+    return;
+  }
+  const channelId = typeof pending?.channelId === "string" ? pending.channelId : "";
+  const statusMessageId = typeof pending?.statusMessageId === "string" ? pending.statusMessageId : "";
+  if (!channelId || !statusMessageId) {
+    await fs.unlink(restartNoticePath).catch(() => {});
+    return;
+  }
+  const channel = await discord.channels.fetch(channelId).catch(() => null);
+  if (!channel || !channel.isTextBased()) {
+    await fs.unlink(restartNoticePath).catch(() => {});
+    return;
+  }
+  const notice = `✅ Restarted at ${new Date().toISOString()}`;
+  try {
+    const statusMessage = await channel.messages.fetch(statusMessageId);
+    if (statusMessage) {
+      await statusMessage.edit(notice);
+      await fs.unlink(restartNoticePath).catch(() => {});
+      return;
+    }
+  } catch {}
+  await safeSendToChannel(channel, notice);
+  await fs.unlink(restartNoticePath).catch(() => {});
+}
+
+function shouldHandleAsSelfRestartRequest(content) {
+  const text = String(content ?? "").trim().toLowerCase();
+  if (!text || text.startsWith("!")) {
+    return false;
+  }
+  if (!/\brestart\b/.test(text)) {
+    return false;
+  }
+  return (
+    /\b(restart (yourself|the bot|bot)|please restart|restart with the cli|cli commands|dc-bridge restart)\b/.test(text) &&
+    text.length <= 220
+  );
+}
+
 async function handleMessage(message) {
   if (message.author.bot) {
     return;
@@ -323,6 +394,11 @@ async function handleMessage(message) {
 
   if (content.startsWith("!")) {
     await handleCommand(message, content, context);
+    return;
+  }
+
+  if (shouldHandleAsSelfRestartRequest(content)) {
+    await requestSelfRestartFromDiscord(message, content);
     return;
   }
 
@@ -564,6 +640,7 @@ async function handleCommand(message, content, context) {
         "`!ask <prompt>` send prompt in this repo channel",
         "`!status` show queue/thread status for this channel",
         "`!new` reset Codex thread binding for this channel",
+        "`!restart [reason]` request host-managed restart and confirm when back",
         "`!interrupt` interrupt current turn in this channel",
         "`!where` show bot runtime paths and binding details",
         "`!approve [id]` approve the latest (or specified) pending request",
@@ -627,6 +704,11 @@ async function handleCommand(message, content, context) {
     state.clearBinding(context.repoChannelId);
     await state.save();
     await safeReply(message, "Cleared Codex thread binding for this channel. Next prompt starts a new Codex thread.");
+    return;
+  }
+
+  if (command === "!restart") {
+    await requestSelfRestartFromDiscord(message, rest || "manual restart requested from Discord command");
     return;
   }
 
@@ -1765,36 +1847,39 @@ async function finalizeTurn(threadId, error) {
     tracker.flushTimer = null;
   }
 
-  activeTurns.delete(threadId);
+  try {
+    if (error) {
+      tracker.failed = true;
+      tracker.completed = true;
+      tracker.failureMessage = error.message;
+      pushStatusLine(tracker, `❌ Error: ${truncateStatusText(error.message, 220)}`);
+      await flushTrackerParagraphs(tracker, { force: true });
+      tracker.reject(error);
+      return;
+    }
 
-  if (error) {
-    tracker.failed = true;
     tracker.completed = true;
-    tracker.failureMessage = error.message;
-    pushStatusLine(tracker, `❌ Error: ${truncateStatusText(error.message, 220)}`);
+    pushStatusLine(tracker, "👍 Tool calling done");
     await flushTrackerParagraphs(tracker, { force: true });
-    tracker.reject(error);
-    return;
-  }
 
-  tracker.completed = true;
-  pushStatusLine(tracker, "👍 Tool calling done");
-  await flushTrackerParagraphs(tracker, { force: true });
+    const diffBlock = buildFileDiffSection(tracker);
+    const renderPlan = buildTurnRenderPlan({
+      summaryText: tracker.fullText,
+      diffBlock,
+      verbosity: renderVerbosity
+    });
+    if (renderPlan.primaryMessage) {
+      await sendChunkedToChannel(tracker.channel, renderPlan.primaryMessage);
+    }
+    for (const statusMessage of renderPlan.statusMessages) {
+      await sendChunkedToChannel(tracker.channel, statusMessage);
+    }
 
-  const diffBlock = buildFileDiffSection(tracker);
-  const renderPlan = buildTurnRenderPlan({
-    summaryText: tracker.fullText,
-    diffBlock,
-    verbosity: renderVerbosity
-  });
-  if (renderPlan.primaryMessage) {
-    await sendChunkedToChannel(tracker.channel, renderPlan.primaryMessage);
+    tracker.resolve(tracker.fullText);
+  } finally {
+    activeTurns.delete(threadId);
+    await writeHeartbeatFile();
   }
-  for (const statusMessage of renderPlan.statusMessages) {
-    await sendChunkedToChannel(tracker.channel, statusMessage);
-  }
-
-  tracker.resolve(tracker.fullText);
 }
 
 function appendTrackerText(tracker, text, { fromDelta }) {

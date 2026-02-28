@@ -10,7 +10,8 @@ export function createTurnRunner(deps) {
     safeReply,
     buildSandboxPolicyForTurn,
     isThreadNotFoundError,
-    finalizeTurn
+    finalizeTurn,
+    onActiveTurnsChanged
   } = deps;
 
   function enqueuePrompt(repoChannelId, job) {
@@ -81,7 +82,7 @@ export function createTurnRunner(deps) {
             turnParams.sandboxPolicy = sandboxPolicy;
           }
 
-          await requestTurnStartWithReconnectRetry(() => codex.request("turn/start", turnParams));
+          await requestCodexWithReconnectRetry(() => codex.request("turn/start", turnParams));
           await turn.promise;
         };
 
@@ -118,19 +119,19 @@ export function createTurnRunner(deps) {
     queue.running = false;
   }
 
-  async function requestTurnStartWithReconnectRetry(startTurnRequest) {
-    const maxAttempts = 5;
+  async function requestCodexWithReconnectRetry(requestFn) {
+    const maxAttempts = 12;
     let attempt = 1;
     while (true) {
       try {
-        return await startTurnRequest();
+        return await requestFn();
       } catch (error) {
         const message = String(error?.message ?? "");
         const shouldRetry = isTransientReconnectError(message) && attempt < maxAttempts;
         if (!shouldRetry) {
           throw error;
         }
-        await delay(Math.min(5_000, 500 * attempt));
+        await delay(Math.min(4_000, 400 * attempt));
         attempt += 1;
       }
     }
@@ -158,7 +159,7 @@ export function createTurnRunner(deps) {
         if (sandboxMode) {
           resumeParams.sandbox = sandboxMode;
         }
-        await codex.request("thread/resume", resumeParams);
+        await requestCodexWithReconnectRetry(() => codex.request("thread/resume", resumeParams));
         return existingThreadId;
       } catch (error) {
         if (!isThreadNotFoundError(error)) {
@@ -185,7 +186,7 @@ export function createTurnRunner(deps) {
       startParams.sandbox = sandboxMode;
     }
 
-    const result = await codex.request("thread/start", startParams);
+    const result = await requestCodexWithReconnectRetry(() => codex.request("thread/start", startParams));
     const threadId = result?.thread?.id;
     if (!threadId) {
       throw new Error("thread/start did not return thread id");
@@ -241,6 +242,7 @@ export function createTurnRunner(deps) {
       resolve: resolveTurn,
       reject: rejectTurn
     });
+    void onActiveTurnsChanged?.();
 
     return { promise };
   }
@@ -257,6 +259,7 @@ export function createTurnRunner(deps) {
     }
 
     activeTurns.delete(threadId);
+    void onActiveTurnsChanged?.();
     tracker.reject(error ?? new Error("Turn aborted"));
   }
 
@@ -284,7 +287,12 @@ function isTransientReconnectError(message) {
   if (!message) {
     return false;
   }
-  return /reconnecting\.\.\.\s*\d+\/\d+/i.test(message) || /temporarily unavailable/i.test(message);
+  return (
+    /reconnecting\.\.\.\s*\d+\/\d+/i.test(message) ||
+    /temporarily unavailable/i.test(message) ||
+    /connection (?:reset|closed|lost)/i.test(message) ||
+    /econnreset/i.test(message)
+  );
 }
 
 function delay(ms) {

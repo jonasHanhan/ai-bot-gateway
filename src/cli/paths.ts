@@ -12,7 +12,8 @@ export interface CliRuntimePaths {
 }
 
 export function resolveCliRuntimePaths(cwd: string): CliRuntimePaths {
-  const plistLogPaths = readLaunchdLogPaths(cwd);
+  const runtimeRoot = resolveRuntimeRoot(cwd);
+  const plistLogPaths = readLaunchdLogPaths(runtimeRoot);
   const stdoutLogPath = resolveLogPath(
     process.env.DISCORD_STDOUT_LOG_PATH,
     plistLogPaths.stdoutLogPath,
@@ -25,11 +26,11 @@ export function resolveCliRuntimePaths(cwd: string): CliRuntimePaths {
   );
 
   return {
-    configPath: path.resolve(cwd, process.env.CHANNEL_CONFIG_PATH ?? "config/channels.json"),
-    statePath: path.resolve(cwd, process.env.STATE_PATH ?? "data/state.json"),
-    heartbeatPath: path.resolve(cwd, process.env.DISCORD_HEARTBEAT_PATH ?? "data/bridge-heartbeat.json"),
-    restartRequestPath: path.resolve(cwd, process.env.DISCORD_RESTART_REQUEST_PATH ?? "data/restart-request.json"),
-    restartAckPath: path.resolve(cwd, process.env.DISCORD_RESTART_ACK_PATH ?? "data/restart-ack.json"),
+    configPath: path.resolve(runtimeRoot, process.env.CHANNEL_CONFIG_PATH ?? "config/channels.json"),
+    statePath: path.resolve(runtimeRoot, process.env.STATE_PATH ?? "data/state.json"),
+    heartbeatPath: path.resolve(runtimeRoot, process.env.DISCORD_HEARTBEAT_PATH ?? "data/bridge-heartbeat.json"),
+    restartRequestPath: path.resolve(runtimeRoot, process.env.DISCORD_RESTART_REQUEST_PATH ?? "data/restart-request.json"),
+    restartAckPath: path.resolve(runtimeRoot, process.env.DISCORD_RESTART_ACK_PATH ?? "data/restart-ack.json"),
     stdoutLogPath,
     stderrLogPath
   };
@@ -56,6 +57,14 @@ function resolveLogPath(envValue: string | undefined, plistValue: string | null,
     return path.resolve(fromPlist);
   }
   return path.resolve(fallback);
+}
+
+function resolveRuntimeRoot(cwd: string): string {
+  const configured = String(process.env.DISCORD_BRIDGE_ROOT ?? "").trim();
+  if (configured) {
+    return path.resolve(configured);
+  }
+  return path.resolve(cwd);
 }
 
 function readLaunchdLogPaths(cwd: string): { stdoutLogPath: string | null; stderrLogPath: string | null } {
