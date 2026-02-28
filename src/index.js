@@ -302,7 +302,6 @@ serverRequestRuntime = createServerRequestRuntime({
   describeToolRequestUserInput,
   buildApprovalActionRows,
   buildResponseForServerRequest,
-  buildToolRequestUserInputResponse,
   truncateStatusText,
   truncateForDiscordMessage,
   safeSendToChannel,

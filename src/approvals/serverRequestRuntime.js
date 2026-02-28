@@ -11,7 +11,6 @@ export function createServerRequestRuntime(deps) {
     describeToolRequestUserInput,
     buildApprovalActionRows,
     buildResponseForServerRequest,
-    buildToolRequestUserInputResponse,
     truncateStatusText,
     truncateForDiscordMessage,
     safeSendToChannel,
@@ -30,7 +29,7 @@ export function createServerRequestRuntime(deps) {
       return buildUnsupportedToolCallResponse(originalMethod);
     }
     if (resolvedMethod === "item/tool/requestUserInput" || Array.isArray(params?.questions)) {
-      return buildToolRequestUserInputResponse(params, "decline");
+      return buildResponseForServerRequest("item/tool/requestUserInput", params, "decline");
     }
     if (
       resolvedMethod === "item/commandExecution/requestApproval" ||
