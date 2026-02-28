@@ -9,10 +9,12 @@ export async function maybeSendAttachmentsForItem(tracker, item, context) {
     attachmentMaxBytes,
     attachmentRoots,
     imageCacheDir,
+    attachmentInferFromText,
     statusLabelForItemType,
     safeSendToChannel,
     safeSendToChannelPayload,
-    truncateStatusText
+    truncateStatusText,
+    maxAttachmentIssueMessages
   } = context;
 
   if (!attachmentsEnabled || !tracker?.channel || !item || typeof item !== "object") {
@@ -23,84 +25,118 @@ export async function maybeSendAttachmentsForItem(tracker, item, context) {
     return;
   }
 
-  const paths = extractAttachmentPaths(item);
-  if (paths.length === 0) {
+  const candidates = extractAttachmentCandidates(item, { attachmentInferFromText });
+  if (candidates.length === 0) {
     return;
   }
-  const declaredPaths = new Set(extractDeclaredAttachmentPaths(item).map((value) => value.trim()));
+  const telemetry = ensureAttachmentTelemetry(tracker);
+  telemetry.detected += candidates.length;
 
-  for (const filePath of paths) {
-    const normalizedPath = typeof filePath === "string" ? filePath.trim() : "";
-    const announceFailures = itemType === "imageView" || declaredPaths.has(normalizedPath);
-    await sendAttachmentForPath(tracker, filePath, { itemType, itemId: item.id, announceFailures }, {
+  for (const candidate of candidates) {
+    const announceFailures =
+      itemType === "imageView" ||
+      candidate.intent === "explicit_user_request" ||
+      (candidate.intent === "explicit_structured" && isHighConfidencePathReference(candidate.path));
+    await sendAttachmentForPath(
+      tracker,
+      candidate.path,
+      {
+        itemType,
+        itemId: item.id,
+        announceFailures,
+        intent: candidate.intent
+      },
+      {
       attachmentMaxBytes,
       attachmentRoots,
       imageCacheDir,
       statusLabelForItemType,
       safeSendToChannel,
       safeSendToChannelPayload,
-      truncateStatusText
-    });
+      truncateStatusText,
+      maxAttachmentIssueMessages,
+      telemetry
+      }
+    );
   }
 }
 
-function extractDeclaredAttachmentPaths(item) {
+function extractAttachmentCandidates(item, options = {}) {
+  const attachmentInferFromText = options.attachmentInferFromText === true;
   const declared = [];
-  const add = (value) => {
+  const addDeclared = (value, source = "path") => {
     if (typeof value !== "string") {
       return;
     }
     const trimmed = value.trim();
     if (trimmed) {
+      if ((source === "name" || source === "filename") && !isHighConfidencePathReference(trimmed)) {
+        return;
+      }
       declared.push(trimmed);
     }
   };
 
-  add(item?.path);
-  add(item?.file);
-  add(item?.filename);
-  add(item?.name);
-  add(item?.outputPath);
-  add(item?.artifactPath);
+  addDeclared(item?.path, "path");
+  addDeclared(item?.file, "file");
+  addDeclared(item?.filename, "filename");
+  addDeclared(item?.name, "name");
+  addDeclared(item?.outputPath, "outputPath");
+  addDeclared(item?.artifactPath, "artifactPath");
   if (Array.isArray(item?.paths)) {
     for (const value of item.paths) {
-      add(value);
+      addDeclared(value, "paths");
     }
   }
   if (Array.isArray(item?.files)) {
     for (const entry of item.files) {
       if (typeof entry === "string") {
-        add(entry);
+        addDeclared(entry, "files");
       } else if (entry && typeof entry === "object") {
-        add(entry.path);
-        add(entry.file);
-        add(entry.name);
-        add(entry.filename);
+        addDeclared(entry.path, "path");
+        addDeclared(entry.file, "file");
+        addDeclared(entry.name, "name");
+        addDeclared(entry.filename, "filename");
       }
     }
   }
-  return [...new Set(declared)];
+  const declaredCandidates = [...new Set(declared)].map((value) => {
+    const intent = item?.type === "imageView" ? "explicit_user_request" : "explicit_structured";
+    return { path: value, intent };
+  });
+  // Cutover note: this bridge is migrating toward explicit-only attachment intents.
+  // Keep text inference disabled by default and treat it as a temporary fallback path.
+  if (!attachmentInferFromText) {
+    return declaredCandidates;
+  }
+  const inferred = extractInferredAttachmentPaths(item);
+  // Cutover note: inferred path handling is intentionally conservative:
+  // "last-match wins" avoids duplicate uploads from repeated path mentions.
+  // Once explicit attachment contracts are fully adopted, remove this fallback branch.
+  const inferredLast = inferred.length > 0 ? inferred[inferred.length - 1] : null;
+  if (!inferredLast) {
+    return declaredCandidates;
+  }
+  const hasDeclaredMatch = declaredCandidates.some((candidate) => candidate.path === inferredLast);
+  if (hasDeclaredMatch) {
+    return declaredCandidates;
+  }
+  return [...declaredCandidates, { path: inferredLast, intent: "inferred_text_fallback" }];
 }
 
-function extractAttachmentPaths(item) {
-  const paths = [];
-  const pathLikeKeys = new Set(["path", "file", "filename", "name", "outputPath", "artifactPath"]);
+function extractInferredAttachmentPaths(item) {
+  const inferredPaths = [];
+  const pathLikeKeys = new Set(["path", "file", "outputPath", "artifactPath"]);
   const add = (value) => {
     if (typeof value !== "string") {
       return;
     }
     const trimmed = value.trim();
     if (trimmed) {
-      paths.push(trimmed);
+      inferredPaths.push(trimmed);
     }
   };
 
-  add(item.path);
-  add(item.file);
-  add(item.filename);
-  add(item.name);
-  add(item.outputPath);
-  add(item.artifactPath);
   for (const candidate of collectLikelyLocalPathsFromText(item.text)) {
     add(candidate);
   }
@@ -138,7 +174,7 @@ function extractAttachmentPaths(item) {
 
   const queue = [{ value: item, depth: 0 }];
   const seen = new Set();
-  while (queue.length > 0 && paths.length < 64) {
+  while (queue.length > 0 && inferredPaths.length < 64) {
     const current = queue.shift();
     if (!current || current.depth > 3) {
       continue;
@@ -174,7 +210,7 @@ function extractAttachmentPaths(item) {
     }
   }
 
-  return [...new Set(paths)];
+  return [...new Set(inferredPaths)];
 }
 
 function collectLikelyLocalPathsFromText(text) {
@@ -215,7 +251,9 @@ async function sendAttachmentForPath(tracker, filePath, options = {}, context) {
     statusLabelForItemType,
     safeSendToChannel,
     safeSendToChannelPayload,
-    truncateStatusText
+    truncateStatusText,
+    maxAttachmentIssueMessages,
+    telemetry
   } = context;
 
   if (!tracker?.channel) {
@@ -226,14 +264,17 @@ async function sendAttachmentForPath(tracker, filePath, options = {}, context) {
   }
   const trimmed = filePath.trim();
   if (!isSupportedMediaPath(trimmed)) {
+    telemetry.skipped += 1;
     return;
   }
   if (/^https?:\/\//i.test(trimmed)) {
+    telemetry.failed += 1;
     await maybeSendAttachmentIssue(
       tracker,
       `remote:${trimmed}`,
       `Attachment skipped (remote URL not supported): \`${truncateStatusText(trimmed, 120)}\``,
       announceFailures,
+      maxAttachmentIssueMessages,
       safeSendToChannel
     );
     return;
@@ -249,11 +290,13 @@ async function sendAttachmentForPath(tracker, filePath, options = {}, context) {
   try {
     realPath = await fs.realpath(resolvedInputPath);
   } catch {
+    telemetry.failed += 1;
     await maybeSendAttachmentIssue(
       tracker,
       `missing:${resolvedInputPath}`,
       `Attachment missing: \`${path.basename(trimmed)}\``,
       announceFailures,
+      maxAttachmentIssueMessages,
       safeSendToChannel
     );
     return;
@@ -261,11 +304,13 @@ async function sendAttachmentForPath(tracker, filePath, options = {}, context) {
 
   const allowedRoots = resolveAttachmentRoots(tracker, attachmentRoots, imageCacheDir);
   if (!isPathWithinRoots(realPath, allowedRoots)) {
+    telemetry.failed += 1;
     await maybeSendAttachmentIssue(
       tracker,
       `blocked:${realPath}`,
       `Attachment blocked (outside allowed roots): \`${path.basename(realPath)}\``,
       announceFailures,
+      maxAttachmentIssueMessages,
       safeSendToChannel
     );
     return;
@@ -275,25 +320,30 @@ async function sendAttachmentForPath(tracker, filePath, options = {}, context) {
   try {
     stats = await fs.stat(realPath);
   } catch {
+    telemetry.failed += 1;
     await maybeSendAttachmentIssue(
       tracker,
       `unreadable:${realPath}`,
       `Attachment unreadable: \`${path.basename(realPath)}\``,
       announceFailures,
+      maxAttachmentIssueMessages,
       safeSendToChannel
     );
     return;
   }
   if (!stats.isFile()) {
+    telemetry.skipped += 1;
     return;
   }
 
   if (stats.size > attachmentMaxBytes) {
+    telemetry.failed += 1;
     await maybeSendAttachmentIssue(
       tracker,
       `too-large:${realPath}:${stats.size}`,
       `Attachment too large (${formatBytes(stats.size)} > ${formatBytes(attachmentMaxBytes)}): \`${path.basename(realPath)}\``,
       announceFailures,
+      maxAttachmentIssueMessages,
       safeSendToChannel
     );
     return;
@@ -301,6 +351,7 @@ async function sendAttachmentForPath(tracker, filePath, options = {}, context) {
 
   const key = itemId ? `${itemId}:${realPath}` : realPath;
   if (tracker.sentAttachmentKeys?.has(key)) {
+    telemetry.skipped += 1;
     return;
   }
   tracker.sentAttachmentKeys?.add(key);
@@ -311,10 +362,16 @@ async function sendAttachmentForPath(tracker, filePath, options = {}, context) {
     content,
     files: [{ attachment: realPath, name: path.basename(realPath) }]
   });
+  telemetry.uploaded += 1;
 }
 
-async function maybeSendAttachmentIssue(tracker, key, message, announce, safeSendToChannel) {
+async function maybeSendAttachmentIssue(tracker, key, message, announce, maxMessages, safeSendToChannel) {
   if (!announce || !tracker?.channel) {
+    return;
+  }
+  const issueLimit = Number.isFinite(maxMessages) ? Math.max(0, Math.floor(maxMessages)) : 1;
+  const issueCount = Number.isFinite(tracker?.attachmentIssueCount) ? tracker.attachmentIssueCount : 0;
+  if (issueCount >= issueLimit) {
     return;
   }
   const normalizedKey = typeof key === "string" ? key : String(key);
@@ -322,7 +379,25 @@ async function maybeSendAttachmentIssue(tracker, key, message, announce, safeSen
     return;
   }
   tracker.seenAttachmentIssueKeys?.add(normalizedKey);
+  tracker.attachmentIssueCount = issueCount + 1;
   await safeSendToChannel(tracker.channel, message);
+}
+
+function isHighConfidencePathReference(value) {
+  if (typeof value !== "string") {
+    return false;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return false;
+  }
+  if (path.isAbsolute(trimmed)) {
+    return true;
+  }
+  if (trimmed.startsWith("~/") || trimmed.startsWith("./") || trimmed.startsWith("../")) {
+    return true;
+  }
+  return trimmed.includes("/") || trimmed.includes("\\");
 }
 
 function isSupportedMediaPath(value) {
@@ -381,4 +456,16 @@ function formatBytes(bytes) {
     return `${(bytes / 1024).toFixed(1)} KB`;
   }
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function ensureAttachmentTelemetry(tracker) {
+  if (!tracker.attachmentTelemetry || typeof tracker.attachmentTelemetry !== "object") {
+    tracker.attachmentTelemetry = {
+      detected: 0,
+      uploaded: 0,
+      skipped: 0,
+      failed: 0
+    };
+  }
+  return tracker.attachmentTelemetry;
 }

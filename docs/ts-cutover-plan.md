@@ -183,17 +183,17 @@ Observed patterns and how they compare to us:
 
 ## Phase 3: Attachment Pipeline Hardening (Main Pain Point)
 
-- [ ] Introduce typed attachment intent enum:
+- [x] Introduce typed attachment intent enum:
   - `explicit_structured`
   - `explicit_user_request`
   - `inferred_text_fallback`
-- [ ] Default to explicit only; fallback via env flag.
-- [ ] Single per-turn issue reporting with dedupe keys.
-- [ ] Add upload-state model (`queued`, `uploading`, `uploaded`, `failed`) for internal telemetry and optional user-visible concise summaries.
-- [ ] Add "last-match wins" policy for inferred media references within a single assistant message/event:
+- [x] Default to explicit only; fallback via env flag.
+- [x] Single per-turn issue reporting with dedupe keys.
+- [x] Add upload-state model (`queued`, `uploading`, `uploaded`, `failed`) for internal telemetry and optional user-visible concise summaries.
+- [x] Add "last-match wins" policy for inferred media references within a single assistant message/event:
   - when `.png/.jpg/...` appears multiple times in the same message content, only enqueue the final referenced path for upload.
   - keep explicit structured attachments unaffected (still upload all explicitly attached files).
-- [ ] Add clear telemetry/debug counters:
+- [x] Add clear telemetry/debug counters:
   - `attachments_detected`
   - `attachments_uploaded`
   - `attachments_skipped`
@@ -264,12 +264,14 @@ Why this fits sandbox constraints:
 | 2026-02-28 | Branch `feature/ts-cutover-chat-sdk-patterns` | Isolate refactor from hotfix work | Decided |
 | 2026-02-28 | Add dedicated messaging UX phase after attachment hardening | Current user pain is UX noise and mixed signal output | Decided |
 | 2026-02-28 | Inferred media upload should use last-match wins within one message | Prevent duplicate uploads from repeated path mentions in assistant text | Decided |
+| 2026-02-28 | Only announce attachment failures for high-confidence path refs and explicit user-request/image flows | Prevent `Attachment missing` spam from weak filename-only hints during routine command output | Decided |
+| 2026-02-28 | Cap attachment issue notices per turn and suppress them in read-only/general mode | Keep conversation UX clean while preserving actionable diagnostics in repo channels | Decided |
 | 2026-02-28 | Restart control must be host-managed via supervisor + signal files | Sandbox limits prevent reliable direct host process termination | Decided |
 
 ## Open Questions
 
 1. Should text-based attachment path scraping be disabled by default immediately?
-2. Should `general` channel suppress all attachment issue messages unless user explicitly asks for a file?
+2. Should we add a user-facing summary line when attachment issues are suppressed by policy?
 3. Do we keep Bun-only execution, or support Node as well for broader contributor setup?
 
 ## Risks + Mitigations
@@ -294,6 +296,9 @@ Why this fits sandbox constraints:
 - 2026-02-28: Phase 2 continued: extracted approval payload/button parsing/building into `src/codex/approvalPayloads.js` and rewired `src/index.js`.
 - 2026-02-28: Phase 2 continued: extracted attachment pipeline into `src/attachments/service.js` and renderer helpers into `src/render/messageRenderer.js` with behavior-preserving wrappers.
 - 2026-02-28: Phase 2 continued: extracted queue/turn lifecycle orchestration into `src/codex/turnRunner.js` with injected dependencies and thin wrappers in `src/index.js`.
+- 2026-02-28: Phase 3 started: attachment intent classification added (`explicit_structured` + optional `inferred_text_fallback`), fallback scraping gated behind `DISCORD_ATTACHMENT_INFER_FROM_TEXT` (default off), inferred path upload uses last-match wins, and per-turn attachment telemetry counters are tracked.
+- 2026-02-28: Phase 3 hardening pass: filename/name-based candidates now require high-confidence path hints, `imageView` attachment candidates are tagged `explicit_user_request`, failure announcements are restricted to explicit/high-confidence flows, and inferred traversal typo (`paths.length`) was fixed.
+- 2026-02-28: Added per-turn attachment issue cap (`DISCORD_MAX_ATTACHMENT_ISSUES_PER_TURN`, default `1`) and forced issue suppression in read-only/general mode (`allowFileWrites=false`) to prevent channel noise.
 
 ## Reference Links
 

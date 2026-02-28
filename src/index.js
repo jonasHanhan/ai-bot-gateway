@@ -62,8 +62,14 @@ const attachmentMaxBytes =
     ? Math.floor(configuredAttachmentMaxBytes)
     : 8 * 1024 * 1024;
 const attachmentRoots = parsePathListEnv(process.env.DISCORD_ATTACHMENT_ROOTS);
+const attachmentInferFromText = process.env.DISCORD_ATTACHMENT_INFER_FROM_TEXT === "1";
 const attachmentsEnabled = process.env.DISCORD_ENABLE_ATTACHMENTS !== "0";
 const attachmentItemTypes = parseAttachmentItemTypes(process.env.DISCORD_ATTACHMENT_ITEM_TYPES);
+const configuredAttachmentIssueLimit = Number(process.env.DISCORD_MAX_ATTACHMENT_ISSUES_PER_TURN ?? "");
+const attachmentIssueLimitPerTurn =
+  Number.isFinite(configuredAttachmentIssueLimit) && configuredAttachmentIssueLimit >= 0
+    ? Math.floor(configuredAttachmentIssueLimit)
+    : 1;
 const debugLoggingEnabled = process.env.DISCORD_DEBUG_LOGGING === "1";
 const projectsCategoryName =
   process.env.DISCORD_PROJECTS_CATEGORY_NAME ??
@@ -2343,16 +2349,19 @@ async function safeSendToChannelPayload(channel, payload) {
 }
 
 async function maybeSendAttachmentsForItem(tracker, item) {
+  const maxAttachmentIssueMessages = tracker?.allowFileWrites === false ? 0 : attachmentIssueLimitPerTurn;
   await maybeSendAttachmentsForItemFromService(tracker, item, {
     attachmentsEnabled,
     attachmentItemTypes,
     attachmentMaxBytes,
     attachmentRoots,
     imageCacheDir,
+    attachmentInferFromText,
     statusLabelForItemType,
     safeSendToChannel,
     safeSendToChannelPayload,
-    truncateStatusText
+    truncateStatusText,
+    maxAttachmentIssueMessages
   });
 }
 

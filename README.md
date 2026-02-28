@@ -89,6 +89,8 @@ On startup, the bot:
 - Project channels are managed under `codex-projects` by default. Override with `DISCORD_PROJECTS_CATEGORY_NAME`.
 - Image attachments are forwarded into Codex turns as image inputs (downloaded locally by the bot).
 - `DISCORD_ENABLE_ATTACHMENTS` toggles outgoing attachment uploads (defaults to enabled).
+- `DISCORD_ATTACHMENT_INFER_FROM_TEXT` enables inferred uploads from path mentions in tool output text (default: disabled; set to `1` to enable fallback mode).
+- `DISCORD_MAX_ATTACHMENT_ISSUES_PER_TURN` caps "attachment missing/blocked/etc." notices per turn (default: `1`; read-only/general mode forces `0`).
 - `DISCORD_ATTACHMENT_MAX_BYTES` caps attachment size (default: 8MB).
 - `DISCORD_ATTACHMENT_ROOTS` (colon-separated absolute paths) allowlists attachment file locations.
 - `DISCORD_ATTACHMENT_ITEM_TYPES` (comma-separated) sets which item types upload files (default: `imageView`).

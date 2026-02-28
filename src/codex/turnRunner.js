@@ -204,6 +204,7 @@ export function createTurnRunner(deps) {
       allowFileWrites: options.allowFileWrites !== false,
       sentAttachmentKeys: new Set(),
       seenAttachmentIssueKeys: new Set(),
+      attachmentIssueCount: 0,
       fullText: "",
       seenDelta: false,
       currentStatusLine: "⏳ Thinking...",
