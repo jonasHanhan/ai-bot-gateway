@@ -38,7 +38,12 @@ export function createNotificationRuntime(deps) {
         return;
       }
       transitionTurnPhase(tracker, TURN_PHASE.RUNNING);
-      debugLog("item-delta", "agent delta", { threadId, deltaLength: delta.length });
+      debugLog("item-delta", "agent delta", {
+        threadId,
+        turnId: threadId,
+        discordMessageId: tracker.statusMessageId ?? null,
+        deltaLength: delta.length
+      });
       appendTrackerText(tracker, delta, { fromDelta: true });
       return;
     }
@@ -59,6 +64,8 @@ export function createNotificationRuntime(deps) {
       }
       debugLog("item-event", "item lifecycle", {
         threadId,
+        turnId: threadId,
+        discordMessageId: tracker.statusMessageId ?? null,
         state,
         itemType: item?.type,
         itemId: item?.id ?? null
@@ -125,6 +132,8 @@ export function createNotificationRuntime(deps) {
           markTurnReconnecting(tracker, "🔄 Temporary reconnect while processing. Continuing automatically while connection recovers...");
           debugLog("transport", "transient reconnect while turn active", {
             threadId,
+            turnId: threadId,
+            discordMessageId: tracker.statusMessageId ?? null,
             message: truncateStatusText(String(message ?? ""), 200)
           });
           return;
@@ -297,6 +306,8 @@ export function createNotificationRuntime(deps) {
     const message = await safeSendToChannel(tracker.channel, normalized);
     debugLog("status", "status line sent", {
       threadId: tracker.threadId,
+      turnId: tracker.threadId,
+      discordMessageId: tracker.statusMessageId ?? null,
       line: normalized
     });
     return message;
@@ -375,11 +386,13 @@ export function createNotificationRuntime(deps) {
         await message.react(emoji);
       }
     } catch (error) {
-      debugLog("status", "completion reaction failed", {
-        threadId: tracker.threadId,
-        key,
-        emoji,
-        error: String(error?.message ?? error)
+    debugLog("status", "completion reaction failed", {
+      threadId: tracker.threadId,
+      turnId: tracker.threadId,
+      discordMessageId: tracker.statusMessageId ?? null,
+      key,
+      emoji,
+      error: String(error?.message ?? error)
       });
     }
   }
@@ -416,6 +429,7 @@ export function createNotificationRuntime(deps) {
         tracker.lastRenderedContent = payload;
         debugLog("render", "edited status message", {
           threadId: tracker.threadId,
+          turnId: tracker.threadId,
           messageId: tracker.statusMessageId
         });
         return;
@@ -423,6 +437,7 @@ export function createNotificationRuntime(deps) {
     } catch (error) {
       debugLog("render", "direct edit failed", {
         threadId: tracker.threadId,
+        turnId: tracker.threadId,
         messageId: tracker.statusMessageId,
         error: String(error?.message ?? error)
       });
@@ -437,6 +452,7 @@ export function createNotificationRuntime(deps) {
           tracker.lastRenderedContent = payload;
           debugLog("render", "fetched and edited status message", {
             threadId: tracker.threadId,
+            turnId: tracker.threadId,
             messageId: tracker.statusMessageId
           });
           return;
@@ -444,6 +460,7 @@ export function createNotificationRuntime(deps) {
       } catch (error) {
         debugLog("render", "fetch/edit fallback failed", {
           threadId: tracker.threadId,
+          turnId: tracker.threadId,
           messageId: tracker.statusMessageId,
           error: String(error?.message ?? error)
         });
@@ -452,10 +469,16 @@ export function createNotificationRuntime(deps) {
 
     const replacement = await safeSendToChannel(tracker.channel, payload);
     if (replacement) {
+      const previousDiscordMessageId = tracker.statusMessageId ?? null;
       tracker.statusMessage = replacement;
       tracker.statusMessageId = replacement.id;
       tracker.lastRenderedContent = payload;
-      debugLog("render", "sent replacement status message", { threadId: tracker.threadId, messageId: replacement.id });
+      debugLog("render", "sent replacement status message", {
+        threadId: tracker.threadId,
+        turnId: tracker.threadId,
+        previousDiscordMessageId,
+        messageId: replacement.id
+      });
     }
   }
 

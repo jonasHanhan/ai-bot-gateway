@@ -47,7 +47,9 @@ export function createServerRequestRuntime(deps) {
 
   async function handleServerRequest({ id, method, params }) {
     const resolvedMethod = resolveServerRequestMethod(method, params);
-    console.log(`server request method=${method} resolved=${resolvedMethod} id=${String(id)} idType=${typeof id}`);
+    console.log(
+      `[approval:request] method=${method} resolved=${resolvedMethod} requestId=${String(id)} requestIdType=${typeof id}`
+    );
 
     if (resolvedMethod === "item/tool/call") {
       const threadId = extractThreadId(params);
@@ -67,7 +69,7 @@ export function createServerRequestRuntime(deps) {
     }
 
     if (!isApprovalLikeServerRequestMethod(resolvedMethod)) {
-      console.warn(`Unhandled server request method: ${method} (resolved=${resolvedMethod})`);
+      console.warn(`[approval:request] unhandled method=${method} resolved=${resolvedMethod} requestId=${String(id)}`);
       const bestEffort = buildBestEffortServerRequestResponse(resolvedMethod, method, params);
       codex.respond(id, bestEffort);
       return;
@@ -127,12 +129,12 @@ export function createServerRequestRuntime(deps) {
     }
 
     if (existingToken) {
-      console.warn(`Duplicate approval request for requestId=${id}; reusing token=${token}`);
+      console.warn(`[approval:request] duplicate requestId=${String(id)} token=${token} threadId=${threadId ?? "n/a"}`);
       return;
     }
 
     console.log(
-      `approval requested method=${resolvedMethod} token=${token} requestId=${id} channel=${repoChannelId} thread=${threadId ?? "n/a"}`
+      `[approval:request] queued method=${resolvedMethod} token=${token} requestId=${String(id)} channelId=${repoChannelId} threadId=${threadId ?? "n/a"}`
     );
 
     const approvalContent = truncateForDiscordMessage(
@@ -171,7 +173,7 @@ export function createServerRequestRuntime(deps) {
     try {
       const response = buildResponseForServerRequest(approval.method, approval.params, decision);
       console.log(
-        `approval response method=${approval.method} token=${token} requestId=${String(approval.requestId)} requestIdType=${typeof approval.requestId} decision=${decision}`
+        `[approval:decision] method=${approval.method} token=${token} requestId=${String(approval.requestId)} requestIdType=${typeof approval.requestId} decision=${decision}`
       );
       codex.respond(approval.requestId, response);
     } catch (error) {
