@@ -218,7 +218,7 @@ Observed patterns and how they compare to us:
 
 ## Phase 5: Tests + Reliability Gates
 
-- [ ] Unit tests for path/policy/extraction logic.
+- [x] Unit tests for path/policy/extraction logic.
 - [ ] Unit tests for approval decision mapping.
 - [ ] Integration smoke test for one turn with outbound image upload.
 - [ ] Add CI check: typecheck + test + lint.
@@ -304,6 +304,8 @@ Why this fits sandbox constraints:
 - 2026-02-28: Phase 3.5 started: added renderer plan contract (`primaryMessage`, `statusMessages`, `attachments`) and introduced `DISCORD_RENDER_VERBOSITY` with status-item gating (`user` default, `ops`, `debug`).
 - 2026-02-28: Added status-line dedupe (`lastStatusUpdateLine`) to prevent repeated identical lifecycle/status posts in the same turn.
 - 2026-02-28: Phase 4 started: added `src/codex/notificationMapper.js` for normalized Codex notification kinds and introduced TS boundary contracts in `src/types/codex-events.ts` and `src/types/discord-events.ts`.
+- 2026-02-28: Phase 5 started: added Bun unit tests for attachment extraction/path policy (`test/attachments.service.test.ts`) and a `bun test` script in `package.json`.
+- 2026-02-28: Tightened inferred media path regex to stop at whitespace (fixes false captures like `"/tmp/one.png then /tmp/two.png"` and stabilizes last-match inference behavior).
 
 ## Reference Links
 

@@ -61,7 +61,7 @@ export async function maybeSendAttachmentsForItem(tracker, item, context) {
   }
 }
 
-function extractAttachmentCandidates(item, options = {}) {
+export function extractAttachmentCandidates(item, options = {}) {
   const attachmentInferFromText = options.attachmentInferFromText === true;
   const declared = [];
   const addDeclared = (value, source = "path") => {
@@ -213,13 +213,13 @@ function extractInferredAttachmentPaths(item) {
   return [...new Set(inferredPaths)];
 }
 
-function collectLikelyLocalPathsFromText(text) {
+export function collectLikelyLocalPathsFromText(text) {
   if (typeof text !== "string" || !text) {
     return [];
   }
   const found = new Set();
   const mediaPathPattern =
-    /(?:^|[\s([`'"])((?:\/|~\/)[^)\]`'"<>\r\n]+\.(?:png|jpe?g|webp|gif|bmp|tiff?|svg|mp4|mov|m4v|webm|mkv|avi|mp3|m4a|wav|flac|aac|ogg))(?:$|[\s)\]`'",.!?:;])/gi;
+    /(?:^|[\s([`'"])((?:\/|~\/)[^\s)\]`'"<>\r\n]+\.(?:png|jpe?g|webp|gif|bmp|tiff?|svg|mp4|mov|m4v|webm|mkv|avi|mp3|m4a|wav|flac|aac|ogg))(?:$|[\s)\]`'",.!?:;])/gi;
   let match = mediaPathPattern.exec(text);
   while (match) {
     const candidate = String(match[1] ?? "").trim();
@@ -383,7 +383,7 @@ async function maybeSendAttachmentIssue(tracker, key, message, announce, maxMess
   await safeSendToChannel(tracker.channel, message);
 }
 
-function isHighConfidencePathReference(value) {
+export function isHighConfidencePathReference(value) {
   if (typeof value !== "string") {
     return false;
   }

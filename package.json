@@ -9,6 +9,7 @@
     "start": "bun run src/index.js",
     "start:ts": "bun run src/app/main.ts",
     "cli": "bun run src/cli/index.ts",
+    "test": "bun test",
     "typecheck": "tsc --noEmit",
     "scan:secrets": "bash ./scripts/scan-secrets.sh"
   },
