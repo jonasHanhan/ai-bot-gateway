@@ -15,7 +15,7 @@ Personal Discord bridge for Codex app-server.
 - Emits assistant output as paragraph messages (no single-message edit loop).
 - Emits separate status messages for non-agent items (tools/commands/etc.).
 - Handles approval requests via buttons (with command fallback).
-- Uploads attachment files for configured item types (default: `imageView` screenshots).
+- Uploads attachment files for configured item types (default: `imageView`, `toolCall`, `mcpToolCall`, `commandExecution`).
 
 ## Architecture Map
 
@@ -82,10 +82,12 @@ On startup, the bot:
 
 ## Commands
 
+- `!help` show available bot commands
 - `!ask <prompt>` send a prompt in the current repo channel
 - `!initrepo [force]` initialize/bind this channel to a local repo path using the channel name
 - `!status` show queue and binding state
 - `!new` clear stored Codex thread binding for the current channel
+- `!restart [reason]` request host-managed restart and receive a post-restart confirmation on the same status message
 - `!interrupt` request turn interruption for the current channel
 - `!where` show bot paths/config/thread binding for this channel
 - `!approve [id]` approve latest pending request in the channel (or specific id)
@@ -143,13 +145,15 @@ On startup, the bot:
 - `DISCORD_MAX_ATTACHMENT_ISSUES_PER_TURN` caps "attachment missing/blocked/etc." notices per turn (default: `1`; read-only/general mode forces `0`).
 - `DISCORD_ATTACHMENT_MAX_BYTES` caps attachment size (default: 8MB).
 - `DISCORD_ATTACHMENT_ROOTS` (colon-separated absolute paths) allowlists attachment file locations.
-- `DISCORD_ATTACHMENT_ITEM_TYPES` (comma-separated) sets which item types upload files (default: `imageView`).
+- `DISCORD_ATTACHMENT_ITEM_TYPES` (comma-separated) sets which item types upload files (default: `imageView,toolCall,mcpToolCall,commandExecution`).
 - `DISCORD_RENDER_VERBOSITY` controls status-line noise (`user` default, `ops`, `debug`).
 - `DISCORD_DEBUG_LOGGING=1` enables detailed turn/item/message-edit debug logs.
 - `DISCORD_HEARTBEAT_PATH` sets the bridge heartbeat file path (default: `data/bridge-heartbeat.json`).
 - `DISCORD_HEARTBEAT_INTERVAL_MS` sets heartbeat write interval (default: `30000`, min effective `5000`).
 - `DISCORD_RESTART_REQUEST_PATH` sets CLI reload signal file path (default: `data/restart-request.json`).
 - `DISCORD_RESTART_ACK_PATH` sets the host-ack marker path written by supervisor (default: `data/restart-ack.json`).
+- `DISCORD_RESTART_NOTICE_PATH` sets pending Discord restart notice state path (default: `data/restart-discord-notice.json`).
+- `DISCORD_INFLIGHT_RECOVERY_PATH` sets persisted in-flight turn recovery path (default: `data/inflight-turns.json`).
 - `DISCORD_EXIT_ON_RESTART_ACK=1` lets bridge self-exit after ack marker detection (disabled by default).
 - `DISCORD_STDOUT_LOG_PATH` overrides CLI `logs` stdout file path (otherwise launchd plist or `/tmp/codex-discord-bridge.out.log`).
 - `DISCORD_STDERR_LOG_PATH` overrides CLI `logs` stderr file path (otherwise launchd plist or `/tmp/codex-discord-bridge.err.log`).
