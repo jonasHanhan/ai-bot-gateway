@@ -253,6 +253,7 @@ Planned commands:
   - show version, config path, state path, channel count, last heartbeat.
 - [x] `codex-bridge logs`
   - tail active runtime logs (stdout/stderr) using launchd/env-resolved log paths.
+  - support `--clear` and `--since <duration|iso>` for cleaner incident triage loops.
 - [x] `codex-bridge config validate`
   - validate env/config and print actionable errors.
 - [x] `codex-bridge doctor`
@@ -334,6 +335,8 @@ Why this fits sandbox constraints:
 - 2026-02-28: Added ESLint flat config + `bun run lint` and wired CI lint stage before typecheck/tests.
 - 2026-02-28: Executed local checklist validation pass; signed off approvals/media/read-only via tests and documented live-Discord-only blockers for message routing/`!commands`.
 - 2026-02-28: Added `logs` operator CLI command to tail active session logs and wired log path resolution (env override -> launchd plist -> `/tmp` fallback).
+- 2026-02-28: Enhanced `logs` command with `--clear` and `--since` support; added richer correlation metadata in runtime logs for turn/message/request tracing.
+- 2026-02-28: Continued `src/index.js` decomposition by extracting runtime env parsing (`src/config/runtimeEnv.js`), shared runtime helpers (`src/app/runtimeUtils.js`), and startup/shutdown lifecycle orchestration (`src/app/startup.js`, `src/app/shutdown.js`).
 
 ## Reference Links
 
