@@ -38,6 +38,7 @@ import {
 import { StateStore } from "./stateStore.js";
 import { TURN_PHASE, transitionTurnPhase } from "./turns/lifecycle.js";
 import { createNotificationRuntime } from "./turns/notificationRuntime.js";
+import { createTurnRecoveryStore } from "./turns/recoveryStore.js";
 import {
   buildFileDiffSection,
   extractWebSearchDetails,
@@ -96,6 +97,7 @@ const restartAckPath = path.resolve(process.env.DISCORD_RESTART_ACK_PATH ?? "dat
 const restartNoticePath = path.resolve(
   process.env.DISCORD_RESTART_NOTICE_PATH ?? "data/restart-discord-notice.json"
 );
+const inFlightRecoveryPath = path.resolve(process.env.DISCORD_INFLIGHT_RECOVERY_PATH ?? "data/inflight-turns.json");
 const exitOnRestartAck = process.env.DISCORD_EXIT_ON_RESTART_ACK === "1";
 const configuredHeartbeatIntervalMs = Number(process.env.DISCORD_HEARTBEAT_INTERVAL_MS ?? "");
 const heartbeatIntervalMs =
@@ -134,6 +136,13 @@ const discord = new Client({
 const codex = new CodexRpcClient({
   codexBin
 });
+const turnRecoveryStore = createTurnRecoveryStore({
+  fs,
+  path,
+  recoveryPath: inFlightRecoveryPath,
+  debugLog
+});
+await turnRecoveryStore.load();
 
 const queues = new Map();
 const activeTurns = new Map();
@@ -156,6 +165,12 @@ const turnRunner = createTurnRunner({
   isThreadNotFoundError,
   finalizeTurn,
   onTurnReconnectPending,
+  onTurnCreated: async (tracker) => {
+    await turnRecoveryStore.upsertTurnFromTracker(tracker);
+  },
+  onTurnAborted: async (threadId) => {
+    await turnRecoveryStore.removeTurn(threadId);
+  },
   onActiveTurnsChanged: () => runtimeOps?.writeHeartbeatFile()
 });
 const attachmentInputBuilder = createAttachmentInputBuilder({
@@ -288,7 +303,10 @@ notificationRuntime = createNotificationRuntime({
   truncateForDiscordMessage,
   discordMaxMessageLength,
   debugLog,
-  writeHeartbeatFile
+  writeHeartbeatFile,
+  onTurnFinalized: async (tracker) => {
+    await turnRecoveryStore.removeTurn(tracker?.threadId);
+  }
 });
 serverRequestRuntime = createServerRequestRuntime({
   codex,
@@ -339,6 +357,20 @@ await discord.login(discordToken);
 await discord.application?.fetch().catch(() => null);
 await waitForDiscordReady(discord);
 await maybeCompletePendingRestartNotice();
+try {
+  const recovery = await turnRecoveryStore.reconcilePending({
+    discord,
+    codex,
+    safeSendToChannel
+  });
+  if (recovery.reconciled > 0) {
+    console.log(
+      `turn recovery complete (reconciled=${recovery.reconciled}, resumed_known=${recovery.resumedKnown}, missing_thread=${recovery.missingThread}, skipped=${recovery.skipped})`
+    );
+  }
+} catch (error) {
+  console.error(`turn recovery failed: ${error.message}`);
+}
 try {
   const bootstrapSummary = await bootstrapChannelMappings();
   console.log(

@@ -20,7 +20,8 @@ export function createNotificationRuntime(deps) {
     truncateForDiscordMessage,
     discordMaxMessageLength,
     debugLog,
-    writeHeartbeatFile
+    writeHeartbeatFile,
+    onTurnFinalized
   } = deps;
 
   async function handleNotification({ method, params }) {
@@ -226,6 +227,7 @@ export function createNotificationRuntime(deps) {
       tracker.resolve(tracker.fullText);
     } finally {
       activeTurns.delete(threadId);
+      await onTurnFinalized?.(tracker);
       await writeHeartbeatFile();
     }
   }

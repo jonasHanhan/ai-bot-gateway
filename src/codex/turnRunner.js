@@ -13,7 +13,9 @@ export function createTurnRunner(deps) {
     isThreadNotFoundError,
     finalizeTurn,
     onActiveTurnsChanged,
-    onTurnReconnectPending
+    onTurnReconnectPending,
+    onTurnCreated,
+    onTurnAborted
   } = deps;
 
   function enqueuePrompt(repoChannelId, job) {
@@ -295,6 +297,7 @@ export function createTurnRunner(deps) {
       reject: rejectTurn
     });
     void onActiveTurnsChanged?.();
+    void onTurnCreated?.(activeTurns.get(threadId));
 
     return { promise };
   }
@@ -313,6 +316,7 @@ export function createTurnRunner(deps) {
     activeTurns.delete(threadId);
     void onActiveTurnsChanged?.();
     tracker.lifecyclePhase = TURN_PHASE.CANCELLED;
+    void onTurnAborted?.(threadId, tracker);
     tracker.reject(error ?? new Error("Turn aborted"));
   }
 
