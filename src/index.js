@@ -13,6 +13,8 @@ import {
 } from "discord.js";
 import { CodexRpcClient } from "./codexRpcClient.js";
 import { maybeSendAttachmentsForItem as maybeSendAttachmentsForItemFromService } from "./attachments/service.js";
+import { createAttachmentInputBuilder } from "./attachments/inputBuilder.js";
+import { createRuntimeOps } from "./app/runtimeOps.js";
 import { resolveRepoContext, isGeneralChannel } from "./channels/context.js";
 import { loadConfig, parseAttachmentItemTypes, parsePathListEnv } from "./config/loadConfig.js";
 import {
@@ -30,6 +32,7 @@ import {
   truncateForDiscordMessage
 } from "./render/messageRenderer.js";
 import { StateStore } from "./stateStore.js";
+import { normalizeFinalSummaryText } from "./turns/textNormalization.js";
 
 dotenv.config();
 
@@ -123,9 +126,8 @@ const activeTurns = new Map();
 const pendingApprovals = new Map();
 let nextApprovalToken = 1;
 const processStartedAt = new Date().toISOString();
-let heartbeatTimer = null;
 let shuttingDown = false;
-let restartAckHandled = false;
+let runtimeOps = null;
 const turnRunner = createTurnRunner({
   queues,
   activeTurns,
@@ -136,7 +138,16 @@ const turnRunner = createTurnRunner({
   buildSandboxPolicyForTurn,
   isThreadNotFoundError,
   finalizeTurn,
-  onActiveTurnsChanged: () => writeHeartbeatFile()
+  onActiveTurnsChanged: () => runtimeOps?.writeHeartbeatFile()
+});
+const attachmentInputBuilder = createAttachmentInputBuilder({
+  fs,
+  imageCacheDir,
+  maxImagesPerMessage,
+  discordToken,
+  fetch,
+  formatInputTextForSetup,
+  logger: console
 });
 
 codex.on("stderr", (line) => {
@@ -170,6 +181,25 @@ discord.on("interactionCreate", (interaction) => {
   });
 });
 
+runtimeOps = createRuntimeOps({
+  fs,
+  path,
+  debugLog,
+  activeTurns,
+  pendingApprovals,
+  heartbeatPath,
+  restartRequestPath,
+  restartAckPath,
+  restartNoticePath,
+  processStartedAt,
+  heartbeatIntervalMs,
+  exitOnRestartAck,
+  safeReply,
+  safeSendToChannel,
+  truncateStatusText,
+  shutdown
+});
+
 await codex.start();
 await fs.mkdir(generalChannelCwd, { recursive: true }).catch((error) => {
   console.warn(`failed to ensure general cwd at ${generalChannelCwd}: ${error.message}`);
@@ -200,10 +230,7 @@ async function shutdown(exitCode) {
     return;
   }
   shuttingDown = true;
-  if (heartbeatTimer) {
-    clearInterval(heartbeatTimer);
-    heartbeatTimer = null;
-  }
+  runtimeOps?.stopHeartbeatLoop();
   try {
     await codex.stop();
   } catch {}
@@ -212,121 +239,23 @@ async function shutdown(exitCode) {
 }
 
 function startHeartbeatLoop() {
-  void writeHeartbeatFile();
-  void maybeHandleRestartAckSignal();
-  heartbeatTimer = setInterval(() => {
-    void writeHeartbeatFile();
-    void maybeHandleRestartAckSignal();
-  }, heartbeatIntervalMs);
-  if (typeof heartbeatTimer?.unref === "function") {
-    heartbeatTimer.unref();
-  }
+  runtimeOps?.startHeartbeatLoop();
 }
 
 async function writeHeartbeatFile() {
-  try {
-    const payload = {
-      updatedAt: new Date().toISOString(),
-      startedAt: processStartedAt,
-      pid: process.pid,
-      activeTurns: activeTurns.size,
-      pendingApprovals: pendingApprovals.size,
-      restartRequestPath,
-      restartAckPath
-    };
-    await fs.mkdir(path.dirname(heartbeatPath), { recursive: true });
-    const tempPath = `${heartbeatPath}.tmp`;
-    await fs.writeFile(tempPath, JSON.stringify(payload, null, 2), "utf8");
-    await fs.rename(tempPath, heartbeatPath);
-  } catch (error) {
-    debugLog("ops", "heartbeat write failed", { message: String(error?.message ?? error) });
-  }
-}
-
-async function maybeHandleRestartAckSignal() {
-  if (!exitOnRestartAck || restartAckHandled || shuttingDown) {
-    return;
-  }
-  try {
-    const raw = await fs.readFile(restartAckPath, "utf8");
-    const parsed = JSON.parse(raw);
-    const acknowledgedAt = typeof parsed?.acknowledgedAt === "string" ? parsed.acknowledgedAt : "";
-    if (!acknowledgedAt) {
-      return;
-    }
-    if (new Date(acknowledgedAt).getTime() <= new Date(processStartedAt).getTime()) {
-      return;
-    }
-    restartAckHandled = true;
-    console.log(`restart ack detected at ${restartAckPath}; exiting for host-managed restart`);
-    await shutdown(0);
-  } catch {}
+  await runtimeOps?.writeHeartbeatFile();
 }
 
 async function requestSelfRestartFromDiscord(message, reason) {
-  const status = await safeReply(message, "🔄 Restart requested. I will confirm here when I am back.");
-  if (!status) {
-    return;
-  }
-  const normalizedReason = truncateStatusText(typeof reason === "string" ? reason : "", 200) || "discord restart request";
-  const requestPayload = {
-    requestedAt: new Date().toISOString(),
-    requestedBy: "discord",
-    pid: process.pid,
-    channelId: status.channelId,
-    statusMessageId: status.id,
-    reason: normalizedReason
-  };
-  await fs.mkdir(path.dirname(restartNoticePath), { recursive: true });
-  await fs.writeFile(restartNoticePath, JSON.stringify(requestPayload, null, 2), "utf8");
-  await fs.mkdir(path.dirname(restartRequestPath), { recursive: true });
-  await fs.writeFile(restartRequestPath, JSON.stringify(requestPayload, null, 2), "utf8");
+  await runtimeOps?.requestSelfRestartFromDiscord(message, reason);
 }
 
 async function maybeCompletePendingRestartNotice() {
-  let pending;
-  try {
-    const raw = await fs.readFile(restartNoticePath, "utf8");
-    pending = JSON.parse(raw);
-  } catch {
-    return;
-  }
-  const channelId = typeof pending?.channelId === "string" ? pending.channelId : "";
-  const statusMessageId = typeof pending?.statusMessageId === "string" ? pending.statusMessageId : "";
-  if (!channelId || !statusMessageId) {
-    await fs.unlink(restartNoticePath).catch(() => {});
-    return;
-  }
-  const channel = await discord.channels.fetch(channelId).catch(() => null);
-  if (!channel || !channel.isTextBased()) {
-    await fs.unlink(restartNoticePath).catch(() => {});
-    return;
-  }
-  const notice = `✅ Restarted at ${new Date().toISOString()}`;
-  try {
-    const statusMessage = await channel.messages.fetch(statusMessageId);
-    if (statusMessage) {
-      await statusMessage.edit(notice);
-      await fs.unlink(restartNoticePath).catch(() => {});
-      return;
-    }
-  } catch {}
-  await safeSendToChannel(channel, notice);
-  await fs.unlink(restartNoticePath).catch(() => {});
+  await runtimeOps?.maybeCompletePendingRestartNotice(discord);
 }
 
 function shouldHandleAsSelfRestartRequest(content) {
-  const text = String(content ?? "").trim().toLowerCase();
-  if (!text || text.startsWith("!")) {
-    return false;
-  }
-  if (!/\brestart\b/.test(text)) {
-    return false;
-  }
-  return (
-    /\b(restart (yourself|the bot|bot)|please restart|restart with the cli|cli commands|dc-bridge restart)\b/.test(text) &&
-    text.length <= 220
-  );
+  return runtimeOps?.shouldHandleAsSelfRestartRequest(content) ?? false;
 }
 
 async function handleMessage(message) {
@@ -477,35 +406,11 @@ function normalizeIncomingContent(content, botUserId) {
 }
 
 function collectImageAttachments(message) {
-  if (!message?.attachments?.size) {
-    return [];
-  }
-  const all = [...message.attachments.values()];
-  return all.filter((attachment) => isImageAttachment(attachment)).slice(0, Math.max(0, maxImagesPerMessage));
-}
-
-function isImageAttachment(attachment) {
-  if (!attachment) {
-    return false;
-  }
-  const contentType = String(attachment.contentType ?? "").toLowerCase();
-  if (contentType.startsWith("image/")) {
-    return true;
-  }
-  const name = String(attachment.name ?? "").toLowerCase();
-  return /\.(png|jpe?g|webp|gif|bmp|tiff?|svg)$/.test(name);
+  return attachmentInputBuilder.collectImageAttachments(message);
 }
 
 async function buildTurnInputFromMessage(message, text, imageAttachments, setup = null) {
-  const inputItems = [];
-  const trimmed = typeof text === "string" ? text.trim() : "";
-  if (trimmed) {
-    inputItems.push({ type: "text", text: formatInputTextForSetup(trimmed, setup) });
-  }
-
-  const localImages = await downloadImageAttachments(imageAttachments, message.id);
-  inputItems.push(...localImages);
-  return inputItems;
+  return await attachmentInputBuilder.buildTurnInputFromMessage(message, text, imageAttachments, setup);
 }
 
 function formatInputTextForSetup(text, setup) {
@@ -524,106 +429,6 @@ function formatInputTextForSetup(text, setup) {
     "",
     trimmed
   ].join("\n");
-}
-
-async function downloadImageAttachments(attachments, messageId) {
-  if (!Array.isArray(attachments) || attachments.length === 0) {
-    return [];
-  }
-  await fs.mkdir(imageCacheDir, { recursive: true });
-  const images = [];
-
-  for (let index = 0; index < attachments.length; index += 1) {
-    const attachment = attachments[index];
-    const downloaded = await downloadImageAttachment(attachment, messageId, index + 1);
-    if (downloaded) {
-      images.push(downloaded);
-      continue;
-    }
-    if (typeof attachment?.url === "string" && attachment.url) {
-      images.push({ type: "image", url: attachment.url });
-    }
-  }
-
-  return images;
-}
-
-async function downloadImageAttachment(attachment, messageId, ordinal) {
-  const sourceUrls = [attachment?.proxyURL, attachment?.url]
-    .filter((value) => typeof value === "string" && value.trim().length > 0)
-    .map((value) => value.trim());
-  if (sourceUrls.length === 0) {
-    return null;
-  }
-
-  try {
-    const bytes = await fetchDiscordAttachmentBytes(sourceUrls);
-    if (bytes.length === 0) {
-      return null;
-    }
-    const extension = guessImageExtension(attachment);
-    const fileName = `${Date.now()}-${messageId}-${ordinal}${extension}`;
-    const filePath = path.join(imageCacheDir, fileName);
-    await fs.writeFile(filePath, bytes);
-    return { type: "localImage", path: filePath };
-  } catch (error) {
-    console.warn(`failed to download Discord image attachment ${attachment?.id ?? "unknown"}: ${error.message}`);
-    return null;
-  }
-}
-
-async function fetchDiscordAttachmentBytes(sourceUrls) {
-  const seen = new Set();
-  const urls = [];
-  for (const sourceUrl of sourceUrls) {
-    if (!seen.has(sourceUrl)) {
-      seen.add(sourceUrl);
-      urls.push(sourceUrl);
-    }
-  }
-
-  const authHeaders = discordToken ? { Authorization: `Bot ${discordToken}` } : null;
-  const attempts = [];
-  for (const sourceUrl of urls) {
-    attempts.push({ sourceUrl, headers: authHeaders });
-    attempts.push({ sourceUrl, headers: null });
-  }
-
-  let lastError = null;
-  for (const attempt of attempts) {
-    try {
-      const response = await fetch(attempt.sourceUrl, {
-        headers: attempt.headers ?? undefined
-      });
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-      }
-      return Buffer.from(await response.arrayBuffer());
-    } catch (error) {
-      lastError = error;
-    }
-  }
-
-  throw lastError ?? new Error("attachment download failed");
-}
-
-function guessImageExtension(attachment) {
-  const byName = path.extname(String(attachment?.name ?? "")).toLowerCase();
-  if (byName && byName.length <= 10) {
-    return byName;
-  }
-  const contentType = String(attachment?.contentType ?? "").toLowerCase();
-  const known = {
-    "image/jpeg": ".jpg",
-    "image/jpg": ".jpg",
-    "image/png": ".png",
-    "image/webp": ".webp",
-    "image/gif": ".gif",
-    "image/bmp": ".bmp",
-    "image/tiff": ".tif",
-    "image/svg+xml": ".svg"
-  };
-  return known[contentType] ?? ".png";
 }
 
 async function handleCommand(message, content, context) {
@@ -1912,70 +1717,6 @@ async function finalizeTurn(threadId, error) {
     activeTurns.delete(threadId);
     await writeHeartbeatFile();
   }
-}
-
-function collapseAdjacentDuplicateParagraphs(text) {
-  const source = typeof text === "string" ? text : "";
-  if (!source.trim()) {
-    return source;
-  }
-  const paragraphs = source.split(/\n{2,}/);
-  const deduped = [];
-  for (const paragraph of paragraphs) {
-    const normalized = paragraph.trim();
-    if (!normalized) {
-      continue;
-    }
-    const previous = deduped.length > 0 ? deduped[deduped.length - 1].trim() : "";
-    if (previous && previous === normalized) {
-      continue;
-    }
-    deduped.push(paragraph);
-  }
-  return deduped.join("\n\n");
-}
-
-function collapseConsecutiveDuplicateLines(text) {
-  const source = typeof text === "string" ? text : "";
-  if (!source) {
-    return source;
-  }
-  const lines = source.split("\n");
-  const deduped = [];
-  for (const line of lines) {
-    const normalized = line.trim();
-    const previous = deduped.length > 0 ? deduped[deduped.length - 1].trim() : "";
-    if (normalized && normalized === previous) {
-      continue;
-    }
-    deduped.push(line);
-  }
-  return deduped.join("\n");
-}
-
-function collapseExactRepeatedBody(text) {
-  const source = typeof text === "string" ? text : "";
-  const trimmed = source.trim();
-  if (!trimmed || trimmed.length > 400) {
-    return source;
-  }
-  if (trimmed.length % 2 !== 0) {
-    return source;
-  }
-  const half = trimmed.length / 2;
-  const left = trimmed.slice(0, half).trim();
-  const right = trimmed.slice(half).trim();
-  if (!left || left !== right) {
-    return source;
-  }
-  return left;
-}
-
-function normalizeFinalSummaryText(text) {
-  let normalized = collapseAdjacentDuplicateParagraphs(text);
-  normalized = collapseConsecutiveDuplicateLines(normalized);
-  normalized = collapseExactRepeatedBody(normalized);
-  return normalized;
 }
 
 function appendTrackerText(tracker, text, { fromDelta }) {
