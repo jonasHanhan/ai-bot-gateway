@@ -14,6 +14,108 @@ Long-running Codex backend bridge for Discord and Feishu. It starts `codex app-s
 - The bridge can run in the foreground, behind a restart supervisor, as a macOS `launchd` agent, or as a Linux `systemd` service.
 - A standard HTTP backend exposes `/healthz`, `/readyz`, and optionally `/feishu/events` when Feishu webhook mode is enabled.
 
+## System Architecture
+
+```mermaid
+flowchart LR
+  subgraph Ingress["Chat Ingress"]
+    Discord["Discord runtime"]
+    Feishu["Feishu runtime"]
+    Http["HTTP backend"]
+  end
+
+  Registry["Platform registry"]
+  Commands["Command router"]
+  Queue["Turn runner / per-route queues"]
+  Codex["Codex RPC client"]
+  App["codex app-server"]
+  Notify["Notification runtime"]
+  Approvals["Approval runtime"]
+  State["Config + state files"]
+
+  Discord --> Registry
+  Feishu --> Registry
+  Http --> Registry
+  Registry --> Commands
+  Registry --> Queue
+  Commands --> State
+  Queue --> Codex
+  Codex --> App
+  App --> Notify
+  App --> Approvals
+  Notify --> Registry
+  Approvals --> Registry
+  Queue --> State
+```
+
+### Core Runtime Layers
+
+| Layer | Primary files | Responsibility |
+| --- | --- | --- |
+| Process bootstrap | `src/index.js`, `src/app/mainRuntime.js`, `src/app/runBridgeProcess.js` | Loads env/config/state, wires services, starts/stops the bridge |
+| Platform abstraction | `src/platforms/platformRegistry.js`, `src/platforms/discordPlatform.js`, `src/platforms/feishuPlatform.js` | Normalizes platform capabilities, route lookup, startup, HTTP ingress, and shutdown |
+| Command and route management | `src/commands/router.js`, `src/channels/bootstrapService.js` | Parses commands, mutates route bindings, manages Discord auto-discovery, persists route changes |
+| Codex transport | `src/codexRpcClient.js` | Starts `codex app-server`, sends JSON-RPC requests, receives notifications and server requests |
+| Turn execution | `src/codex/turnRunner.js` | Maintains one FIFO queue per route, resumes/starts threads, retries transient reconnects, stores thread bindings |
+| Output rendering | `src/turns/notificationRuntime.js`, `src/render/messageRenderer.js` | Turns Codex deltas, lifecycle items, diffs, and summary output into chat messages |
+| Approval handling | `src/approvals/serverRequestRuntime.js` | Handles command/file approval requests, approval buttons, and unsupported tool-call fallbacks |
+| HTTP/service ops | `src/backend/httpRuntime.js`, `src/app/runtimeOps.js`, `src/cli/**` | Health endpoints, heartbeat/restart files, operator CLI, service integration |
+
+### Startup Sequence
+
+1. Load `.env`, `config/channels.json`, and `data/state.json`.
+2. Start the backend HTTP server if enabled.
+3. Start `codex app-server` and finish the `initialize` handshake.
+4. Start enabled platforms through the platform registry.
+5. Register Discord slash commands if Discord is enabled.
+6. Start Feishu transport in webhook or long-connection mode if Feishu is enabled.
+7. Reconcile any in-flight turn recovery state.
+8. Bootstrap Discord managed project channels from Codex `thread/list`.
+9. Start heartbeat writes and mark `/readyz` healthy.
+
+## End-to-End Flow
+
+```mermaid
+sequenceDiagram
+  participant User as User
+  participant Chat as Discord / Feishu
+  participant Platform as Platform runtime
+  participant Router as Command router / context resolver
+  participant Queue as Turn runner
+  participant Codex as Codex RPC client
+  participant App as codex app-server
+  participant Notify as Notification / approval runtime
+
+  User->>Chat: Send plain prompt or /command
+  Chat->>Platform: Deliver inbound event
+  Platform->>Router: Normalize route + resolve cwd/setup
+
+  alt Command path
+    Router->>Router: Handle help/status/setpath/resync/etc.
+    Router-->>Chat: Return command response
+  else Prompt path
+    Router->>Queue: Enqueue route-scoped job
+    Queue->>Codex: thread/resume or thread/start
+    Queue->>Codex: turn/start(input, model, sandbox, approval)
+    Codex->>App: JSON-RPC over stdio
+    App-->>Codex: notifications / server requests
+    Codex-->>Notify: item lifecycle, deltas, approvals, completion
+    Notify-->>Chat: Thinking/status updates, approval prompts, final summary
+  end
+```
+
+### Prompt Lifecycle
+
+1. A platform runtime receives an inbound message or command event.
+2. The route is resolved to a setup with `cwd`, model, mode, and write policy.
+3. Command messages are handled immediately by the shared command router.
+4. Prompt messages are queued by route, so one chat never runs overlapping turns.
+5. The turn runner resumes or starts a Codex thread for that route.
+6. `turn/start` is sent to `codex app-server` with model, sandbox, and approval policy.
+7. Notifications stream back into the notification runtime, which renders status, summaries, diffs, and attachments.
+8. Approval requests are intercepted by the approval runtime and sent back to the originating route.
+9. On success or failure, the route's current thread binding is persisted for the next message.
+
 ## Supported Route Types
 
 | Platform | Route type | How it is created | Write mode | Notes |
@@ -23,15 +125,44 @@ Long-running Codex backend bridge for Discord and Feishu. It starts `codex app-s
 | Feishu | Mapped repo chat | Explicit `feishu:<chat_id>` entry in `config/channels.json` | Writable by default | Text only |
 | Feishu | General chat | `FEISHU_GENERAL_CHAT_ID` | Read-only | Similar to Discord `#general` |
 
-## How It Works
+## Capability Summary
 
-1. The bridge starts `codex app-server` over stdio.
-2. It loads env/config/state, then resolves Discord and Feishu runtimes.
-3. Discord project channels are discovered from Codex threads and synchronized into Discord.
-4. Feishu chats are resolved from explicit config entries like `feishu:oc_xxx`.
-5. Each route stores its current Codex thread binding in `data/state.json`.
-6. Incoming prompts are queued per route and executed one turn at a time.
-7. Status messages, summaries, approvals, and restart notices are emitted back into the originating chat.
+| Capability | Discord | Feishu |
+| --- | --- | --- |
+| Persistent Codex thread per route | Yes | Yes |
+| In-chat route rebinding | `!setpath`, `/setpath` | `/setpath` |
+| Auto-discover routes from Codex `cwd` | Yes | No |
+| Auto-create/manage chat containers | Yes | No |
+| Native slash commands | Yes | No |
+| Text `/command` style input | No | Yes |
+| Approval buttons | Yes | No |
+| Text approval commands | Yes | Yes |
+| Image input bridging | Yes | No |
+| Read-only general chat mode | Yes | Yes |
+| Webhook-less transport | N/A | Yes, `FEISHU_TRANSPORT=long-connection` |
+
+## Runtime Model
+
+### Route Binding Model
+
+- A route is the stable chat identifier the bridge uses internally.
+- Discord routes use the raw text channel id.
+- Feishu routes use `feishu:<chat_id>`.
+- Each route resolves to one setup object: `cwd`, `model`, mode, and write policy.
+- Each route also maps to one persistent Codex thread binding in `data/state.json`.
+
+### Execution Model
+
+- Every route has its own FIFO queue.
+- Only one turn per route runs at a time.
+- The bridge tries `thread/resume` before `thread/start`, so the same chat keeps context.
+- If the `cwd` for a route changes, the old thread binding is cleared and the next prompt starts fresh in the new working directory.
+
+### Platform Model
+
+- The platform registry is the boundary between core bridge logic and chat integrations.
+- Discord and Feishu declare capabilities such as attachments, buttons, repo bootstrap, auto-discovery, and webhook ingress.
+- Shared code asks for capabilities instead of branching on platform names whenever possible.
 
 ## Quick Start
 
@@ -215,6 +346,7 @@ Use `.env.example` as the exhaustive reference. The most important variables are
 - access control defaults
 - approval/sandbox defaults
 - turning auto-discovery on or off
+- persistent manual route rebindings made with `setpath`
 
 Example:
 
@@ -251,6 +383,23 @@ Env precedence:
 - `FEISHU_ALLOWED_OPEN_IDS` overrides `allowedFeishuUserIds`
 - `CODEX_APPROVAL_POLICY` overrides `approvalPolicy`
 - `CODEX_SANDBOX_MODE` overrides `sandboxMode`
+
+## State and Persistence
+
+| File | Purpose |
+| --- | --- |
+| `config/channels.json` | Static route mappings, default model/approval/sandbox config, manual `setpath` updates |
+| `data/state.json` | Route -> Codex thread bindings |
+| `data/bridge-heartbeat.json` | Liveness/heartbeat metadata used by `cli status` |
+| `data/restart-request.json` | Requested restarts from chat/CLI |
+| `data/restart-ack.json` | Supervisor acknowledgement of a restart request |
+| `data/restart-discord-notice.json` | Deferred restart notice bookkeeping |
+| `data/inflight-turns.json` | Recovery metadata for active turns across restarts |
+
+Practical distinction:
+
+- `config/channels.json` answers "which repo should this route use?"
+- `data/state.json` answers "which Codex thread is this route currently talking to?"
 
 ## Backend HTTP
 
@@ -498,6 +647,12 @@ If you run `npm link` once in this repo, the same commands are also available as
 - In-flight turn recovery defaults to `data/inflight-turns.json`
 - `bun run cli status` reports heartbeat age, active turns, pending approvals, and log paths
 
+`/healthz` and `/readyz` are startup-oriented operational endpoints:
+
+- `/healthz` reports process-level liveness plus active turn/approval counts
+- `/readyz` flips to `200` after Codex startup, platform startup, and Discord bootstrap complete
+- neither endpoint currently performs a deep revalidation of upstream platform sessions on every request
+
 ## Attachments and Rendering
 
 - Discord input image attachments are downloaded locally and forwarded as image inputs
@@ -509,11 +664,13 @@ If you run `npm link` once in this repo, the same commands are also available as
 
 ## Current Limitations
 
-- Feishu chat bindings are config-driven and are not auto-created
-- Feishu currently accepts text messages only
+- Feishu chat containers are not auto-created; you still need one chat per repo if you want the Discord-style "one workspace per conversation" model
+- Feishu currently accepts text messages only; no attachment/image bridging and no button approvals
 - Discord auto-discovery depends on Codex threads having usable `cwd` values
 - Dynamic tool-call requests are not implemented beyond fallback denial
-- Slash commands exist only on Discord
+- Native slash commands exist only on Discord; Feishu uses text `/command` messages
+- Feishu long-connection mode follows Feishu's single-delivery model: one active client instance receives a given event
+- `setpath` requires an absolute path visible to the bridge process and updates `config/channels.json` in-place
 
 ## Troubleshooting
 
@@ -526,21 +683,26 @@ If you run `npm link` once in this repo, the same commands are also available as
 - If `/readyz` returns `503`, check `bun run cli logs` for startup failures
 - If Discord access requires a local proxy, set `HTTP_PROXY` and `HTTPS_PROXY` and use `bun run start:backend`
 
-## Architecture Map
+## Repository Layout
 
 ```text
 src/index.js                         Runtime entrypoint
 src/app/mainRuntime.js               Compose runtime context + process runner
 src/app/loadRuntimeBootstrapConfig.js Bootstrap env/config/state
-src/app/buildRuntimeGraph.js         Build core runtime services/adapters
+src/app/buildRuntimes.js             Build command, platform, backend, approval, and notification runtimes
 src/app/runBridgeProcess.js          Startup, runtime wiring, shutdown flow
 src/backend/httpRuntime.js           Standard backend HTTP server
+src/platforms/platformRegistry.js    Platform capability registry and dispatch
+src/platforms/discordPlatform.js     Discord adapter
+src/platforms/feishuPlatform.js      Feishu adapter
+src/commands/router.js               Shared command parsing and route mutation
 src/channels/context.js              Discord channel/repo context resolution
 src/channels/bootstrapService.js     Discord channel discovery and management
-src/feishu/runtime.js                Feishu webhook + message adapter
+src/feishu/runtime.js                Feishu webhook/long-connection + message adapter
 src/feishu/context.js                Feishu chat/repo context resolution
 src/codexRpcClient.js                Codex app-server transport
 src/codex/turnRunner.js              Per-route queue and turn lifecycle
+src/turns/notificationRuntime.js     Streaming notification and final summary rendering
 src/approvals/serverRequestRuntime.js Approval request handling
 src/attachments/service.js           Attachment extraction and upload policy
 src/render/messageRenderer.js        Summary/status rendering
