@@ -81,9 +81,11 @@ export function buildCommandRuntime(deps) {
     runManagedRouteCommand,
     handleCommand,
     handleInitRepoCommand,
-    handleSetPathCommand
-  } =
-    commandRouter;
+    handleSetPathCommand,
+    handleMakeChannelCommand,
+    handleBindCommand,
+    handleUnbindCommand
+  } = commandRouter;
 
   return {
     bootstrapChannelMappings,
@@ -92,6 +94,9 @@ export function buildCommandRuntime(deps) {
     runManagedRouteCommand,
     handleCommand,
     handleInitRepoCommand,
-    handleSetPathCommand
+    handleSetPathCommand,
+    handleMakeChannelCommand,
+    handleBindCommand,
+    handleUnbindCommand
   };
 }

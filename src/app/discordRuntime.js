@@ -17,10 +17,13 @@ export function createDiscordRuntime(deps) {
     buildTurnInputFromMessage,
     enqueuePrompt,
     getHelpText,
+    isCommandSupportedForPlatform,
     handleCommand,
     handleInitRepoCommand,
     handleSetPathCommand,
-    isCommandSupportedForPlatform,
+    handleMakeChannelCommand,
+    handleBindCommand,
+    handleUnbindCommand,
     buildCommandTextFromInteraction,
     registerSlashCommands,
     parseApprovalButtonCustomId,
@@ -84,6 +87,30 @@ export function createDiscordRuntime(deps) {
         await handleSetPathCommand(message, rest);
         return;
       }
+      if (command === "!mkchannel") {
+        await handleMakeChannelCommand(message, rest);
+        return;
+      }
+      if (command === "!mkrepo") {
+        await handleMakeChannelCommand(message, rest, { initRepo: true });
+        return;
+      }
+      if (command === "!mkbind") {
+        await handleMakeChannelCommand(message, rest, { bindPath: true });
+        return;
+      }
+      if (command === "!bind") {
+        await handleBindCommand(message, rest);
+        return;
+      }
+      if (command === "!rebind") {
+        await handleBindCommand(message, rest, { rebind: true });
+        return;
+      }
+      if (command === "!unbind") {
+        await handleUnbindCommand(message);
+        return;
+      }
     }
 
     if (!context) {
@@ -143,8 +170,8 @@ export function createDiscordRuntime(deps) {
       await interaction.editReply("Unknown slash command.");
       return;
     }
-
     const message = createInteractionMessageAdapter(interaction);
+
     if (interaction.commandName === "help") {
       await safeReply(message, getHelpText({ platformId: "discord" }));
       return;
@@ -307,6 +334,7 @@ function createInteractionMessageAdapter(interaction) {
 
   return {
     id: interaction.id,
+    platform: "discord",
     author: interaction.user,
     channel: interaction.channel,
     channelId: interaction.channelId,
