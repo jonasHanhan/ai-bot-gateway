@@ -24,6 +24,11 @@ export async function startBridgeRuntime({
   });
   const platformStartSummaries = (await platformRegistry?.start?.()) ?? [];
   for (const summary of platformStartSummaries) {
+    if (summary?.startError) {
+      console.error(`${summary.platformId} startup failed: ${summary.startError.message}`);
+      continue;
+    }
+
     if (summary?.platformId === "discord") {
       if (summary?.commandRegistrationError) {
         console.error(`slash command registration failed: ${summary.commandRegistrationError.message}`);

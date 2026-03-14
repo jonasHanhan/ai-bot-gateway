@@ -109,4 +109,34 @@ describe("platform registry", () => {
     expect(registry.getPlatform("telegram")?.enabled).toBe(false);
     expect(calls).toEqual(["start:discord", "bootstrap:discord", "stop:discord"]);
   });
+
+  test("continues startup when one enabled platform throws", async () => {
+    const calls: string[] = [];
+    const registry = createPlatformRegistry([
+      {
+        platformId: "discord",
+        enabled: true,
+        async start() {
+          calls.push("start:discord");
+          throw new Error("discord tls boom");
+        }
+      },
+      {
+        platformId: "feishu",
+        enabled: true,
+        async start() {
+          calls.push("start:feishu");
+          return { platformId: "feishu", started: true };
+        }
+      }
+    ]);
+
+    const summaries = await registry.start();
+    expect(summaries).toHaveLength(2);
+    expect(summaries[0]?.platformId).toBe("discord");
+    expect(summaries[0]?.started).toBe(false);
+    expect(String(summaries[0]?.startError?.message ?? "")).toBe("discord tls boom");
+    expect(summaries[1]).toEqual({ platformId: "feishu", started: true });
+    expect(calls).toEqual(["start:discord", "start:feishu"]);
+  });
 });

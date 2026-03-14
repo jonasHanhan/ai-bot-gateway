@@ -16,10 +16,14 @@ export function wireBridgeListeners({
     console.error(`[codex] ${line}`);
   });
   codex.on("notification", (event) => {
-    void handleNotification(event);
+    void handleNotification(event).catch((error) => {
+      console.error(`notification handler failed (${event?.method ?? "unknown"}): ${error.message}`);
+    });
   });
   codex.on("serverRequest", (request) => {
-    void handleServerRequest(request);
+    void handleServerRequest(request).catch((error) => {
+      console.error(`server request handler failed (${request?.method ?? "unknown"}): ${error.message}`);
+    });
   });
   codex.on("exit", ({ code, signal }) => {
     console.error(`codex app-server exited (code=${code}, signal=${signal ?? "none"})`);
@@ -30,6 +34,12 @@ export function wireBridgeListeners({
 
   discord.on("clientReady", () => {
     console.log(`Discord connected as ${discord.user?.tag}`);
+  });
+  discord.on("error", (error) => {
+    console.error(`discord client error: ${error.message}`);
+  });
+  discord.on("shardError", (error, shardId) => {
+    console.error(`discord shard error (shard=${shardId}): ${error.message}`);
   });
 
   discord.on("messageCreate", (message) => {

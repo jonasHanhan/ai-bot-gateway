@@ -1,6 +1,26 @@
 export function createDiscordPlatform(deps) {
-  const { discord, discordToken, waitForDiscordReady, runtime, bootstrapChannelMappings } = deps;
+  const {
+    discord,
+    discordToken,
+    waitForDiscordReady,
+    runtime,
+    bootstrapChannelMappings,
+    startTimeoutMs = 10_000
+  } = deps;
   const enabled = Boolean(discordToken);
+  let startAttempted = false;
+  let started = false;
+  let startError = null;
+
+  function isAvailable() {
+    return enabled && started && !startError;
+  }
+
+  function resetClient() {
+    try {
+      discord.destroy();
+    } catch {}
+  }
 
   return {
     platformId: "discord",
@@ -19,15 +39,21 @@ export function createDiscordPlatform(deps) {
       return normalizedRouteId.length > 0 && !normalizedRouteId.includes(":");
     },
     async fetchChannelByRouteId(routeId) {
-      if (!enabled || !this.canHandleRouteId(routeId)) {
+      if (!isAvailable() || !this.canHandleRouteId(routeId)) {
         return null;
       }
       return await discord.channels.fetch(routeId).catch(() => null);
     },
     async handleInboundMessage(message) {
+      if (!isAvailable()) {
+        return;
+      }
       await runtime.handleMessage(message);
     },
     async handleInboundInteraction(interaction) {
+      if (!isAvailable()) {
+        return;
+      }
       await runtime.handleInteraction(interaction);
     },
     async start() {
@@ -40,32 +66,84 @@ export function createDiscordPlatform(deps) {
         };
       }
 
-      await discord.login(discordToken);
-      await discord.application?.fetch().catch(() => null);
-      await waitForDiscordReady(discord);
+      startAttempted = true;
+      started = false;
+      startError = null;
 
-      let commandRegistration = null;
-      let commandRegistrationError = null;
-      if (typeof runtime.registerSlashCommands === "function") {
-        try {
-          commandRegistration = await runtime.registerSlashCommands();
-        } catch (error) {
-          commandRegistrationError = error;
+      try {
+        await withTimeout(
+          (async () => {
+            await discord.login(discordToken);
+            await discord.application?.fetch().catch(() => null);
+            await waitForDiscordReady(discord);
+          })(),
+          startTimeoutMs,
+          "discord startup timed out"
+        );
+
+        let commandRegistration = null;
+        let commandRegistrationError = null;
+        if (typeof runtime.registerSlashCommands === "function") {
+          try {
+            commandRegistration = await runtime.registerSlashCommands();
+          } catch (error) {
+            commandRegistrationError = error;
+          }
         }
-      }
+        started = true;
 
-      return {
-        platformId: "discord",
-        started: true,
-        commandRegistration,
-        commandRegistrationError
-      };
+        return {
+          platformId: "discord",
+          started: true,
+          commandRegistration,
+          commandRegistrationError
+        };
+      } catch (error) {
+        startError = error;
+        started = false;
+        resetClient();
+        return {
+          platformId: "discord",
+          started: false,
+          startError: error,
+          commandRegistration: null,
+          commandRegistrationError: null
+        };
+      }
     },
     async bootstrapRoutes(options = {}) {
-      if (!enabled || typeof bootstrapChannelMappings !== "function") {
+      if (!enabled || !started || startError || typeof bootstrapChannelMappings !== "function") {
         return null;
       }
       return await bootstrapChannelMappings(options);
+    },
+    async stop() {
+      if (!startAttempted) {
+        return { platformId: "discord", stopped: false };
+      }
+      started = false;
+      resetClient();
+      return { platformId: "discord", stopped: true };
     }
   };
+}
+
+async function withTimeout(promise, timeoutMs, message) {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    return await promise;
+  }
+
+  let timeoutId;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timeoutId = setTimeout(() => {
+          reject(new Error(message));
+        }, timeoutMs);
+      })
+    ]);
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
