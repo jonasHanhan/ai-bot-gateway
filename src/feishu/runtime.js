@@ -460,6 +460,20 @@ export function createFeishuRuntime(deps) {
     });
   }
 
+  async function sendFileMessage({ chatId, fileKey, replyToMessageId }) {
+    if (!fileKey) {
+      return null;
+    }
+    return await sendStructuredMessage({
+      chatId,
+      msgType: "file",
+      content: {
+        file_key: fileKey
+      },
+      replyToMessageId
+    });
+  }
+
   async function sendStructuredMessage({ chatId, msgType, content, replyToMessageId }) {
     let response;
     if (replyToMessageId) {
@@ -535,23 +549,32 @@ export function createFeishuRuntime(deps) {
         unsupportedNames.push(fallbackName);
         continue;
       }
-      if (!isImageFilePath(resolved.filePath, resolved.name)) {
-        unsupportedNames.push(resolved.name || path.basename(resolved.filePath));
-        continue;
-      }
 
       try {
-        const imageKey = await uploadImageAttachment(resolved.filePath, resolved.name);
-        const sentImage = await sendImageMessage({
+        if (isImageFilePath(resolved.filePath, resolved.name)) {
+          const imageKey = await uploadImageAttachment(resolved.filePath, resolved.name);
+          const sentImage = await sendImageMessage({
+            chatId,
+            imageKey,
+            replyToMessageId
+          });
+          if (sentImage) {
+            lastMessage = sentImage;
+          }
+          continue;
+        }
+
+        const fileKey = await uploadFileAttachment(resolved.filePath, resolved.name);
+        const sentFile = await sendFileMessage({
           chatId,
-          imageKey,
+          fileKey,
           replyToMessageId
         });
-        if (sentImage) {
-          lastMessage = sentImage;
+        if (sentFile) {
+          lastMessage = sentFile;
         }
       } catch (error) {
-        console.warn(`failed to upload Feishu image ${resolved.filePath}: ${error.message}`);
+        console.warn(`failed to upload Feishu attachment ${resolved.filePath}: ${error.message}`);
         unsupportedNames.push(resolved.name || path.basename(resolved.filePath));
       }
     }
@@ -587,6 +610,26 @@ export function createFeishuRuntime(deps) {
       throw new Error("missing image_key");
     }
     return imageKey;
+  }
+
+  async function uploadFileAttachment(filePath, fileName = "") {
+    const bytes = await fs.readFile(filePath);
+    if (bytes.length === 0) {
+      throw new Error("empty file");
+    }
+
+    const normalizedName = fileName || path.basename(filePath);
+    const form = new FormData();
+    form.set("file_type", guessFeishuFileType(normalizedName));
+    form.set("file_name", normalizedName);
+    form.set("file", new Blob([bytes]), normalizedName);
+
+    const payload = await feishuMultipartRequest("/open-apis/im/v1/files", form);
+    const fileKey = String(payload?.data?.file_key ?? payload?.file_key ?? "").trim();
+    if (!fileKey) {
+      throw new Error("missing file_key");
+    }
+    return fileKey;
   }
 
   async function feishuRequest(pathname, options = {}) {
@@ -1027,7 +1070,32 @@ function extractOutgoingFileName(file) {
 
 function isImageFilePath(filePath, fileName = "") {
   const candidate = String(fileName || filePath || "").toLowerCase();
-  return /\.(png|jpe?g|webp|gif|bmp|tiff?|svg|ico)$/.test(candidate);
+  // Feishu's image message upload endpoint is stricter than Discord-style image handling.
+  // Keep vector/icon assets on the generic file path so `.svg` / `.ico` still round-trip.
+  return /\.(png|jpe?g|webp|gif|bmp|tiff?)$/.test(candidate);
+}
+
+function guessFeishuFileType(fileName = "") {
+  const extension = path.extname(String(fileName ?? "")).toLowerCase();
+  if (extension === ".opus") {
+    return "opus";
+  }
+  if (extension === ".mp4") {
+    return "mp4";
+  }
+  if (extension === ".pdf") {
+    return "pdf";
+  }
+  if (extension === ".doc" || extension === ".docx") {
+    return "doc";
+  }
+  if (extension === ".xls" || extension === ".xlsx" || extension === ".csv") {
+    return "xls";
+  }
+  if (extension === ".ppt" || extension === ".pptx") {
+    return "ppt";
+  }
+  return "stream";
 }
 
 function buildFeishuWhereText({ inboundMessage, senderOpenId, context }) {

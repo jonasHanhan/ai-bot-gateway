@@ -1,5 +1,6 @@
 export function createDiscordRuntime(deps) {
   const {
+    ChannelType,
     discord,
     config,
     resolveRepoContext,
@@ -7,17 +8,24 @@ export function createDiscordRuntime(deps) {
     generalChannelName,
     generalChannelCwd,
     getChannelSetups,
-    bootstrapChannelMappings,
+    projectsCategoryName,
+    managedChannelTopicPrefix,
+    runManagedRouteCommand,
     shouldHandleAsSelfRestartRequest,
     requestSelfRestartFromDiscord,
     collectImageAttachments,
     buildTurnInputFromMessage,
     enqueuePrompt,
+    getHelpText,
+    isCommandSupportedForPlatform,
     handleCommand,
     handleInitRepoCommand,
+    handleSetPathCommand,
     handleMakeChannelCommand,
     handleBindCommand,
     handleUnbindCommand,
+    buildCommandTextFromInteraction,
+    registerSlashCommands,
     parseApprovalButtonCustomId,
     approvalButtonPrefix,
     pendingApprovals,
@@ -48,20 +56,12 @@ export function createDiscordRuntime(deps) {
     }
 
     if (content.toLowerCase() === "!resync") {
-      const result = await bootstrapChannelMappings();
-      await safeReply(
-        message,
-        `Resynced channels. discovered=${result.discoveredCwds}, created=${result.createdChannels}, moved=${result.movedChannels}, pruned=${result.prunedBindings}, mapped=${Object.keys(getChannelSetups()).length}`
-      );
+      await runManagedRouteCommand(message, { forceRebuild: false });
       return;
     }
 
     if (content.toLowerCase() === "!rebuild") {
-      const result = await bootstrapChannelMappings({ forceRebuild: true });
-      await safeReply(
-        message,
-        `Rebuilt channels. nuked_channels=${result.deletedChannels}, nuked_categories=${result.deletedCategories}, cleared_bindings=${result.clearedBindings}, discovered=${result.discoveredCwds}, created=${result.createdChannels}, moved=${result.movedChannels}, pruned=${result.prunedBindings}, mapped=${Object.keys(getChannelSetups()).length}`
-      );
+      await runManagedRouteCommand(message, { forceRebuild: true });
       return;
     }
 
@@ -81,6 +81,10 @@ export function createDiscordRuntime(deps) {
 
       if (command === "!initrepo") {
         await handleInitRepoCommand(message, rest);
+        return;
+      }
+      if (command === "!setpath") {
+        await handleSetPathCommand(message, rest);
         return;
       }
       if (command === "!mkchannel") {
@@ -135,10 +139,88 @@ export function createDiscordRuntime(deps) {
     });
   }
 
-  async function handleInteraction(interaction) {
-    if (!interaction.isButton()) {
+  async function handleChannelCreate(channel) {
+    if (!shouldAutoInitRepoForChannel(channel)) {
       return;
     }
+    await handleInitRepoCommand(createAutoInitMessageAdapter(channel), "");
+  }
+
+  async function handleInteraction(interaction) {
+    if (interaction.isButton()) {
+      await handleApprovalButtonInteraction(interaction);
+      return;
+    }
+
+    if (!interaction.isChatInputCommand()) {
+      return;
+    }
+
+    if (!isAllowedUser(interaction.user.id)) {
+      await interaction.reply({
+        content: "You are not allowed to use this bot.",
+        flags: MessageFlags.Ephemeral
+      });
+      return;
+    }
+
+    await interaction.deferReply();
+    const commandText = buildCommandTextFromInteraction(interaction);
+    if (!commandText) {
+      await interaction.editReply("Unknown slash command.");
+      return;
+    }
+    const message = createInteractionMessageAdapter(interaction);
+
+    if (interaction.commandName === "help") {
+      await safeReply(message, getHelpText({ platformId: "discord" }));
+      return;
+    }
+
+    if (interaction.commandName === "resync") {
+      await runManagedRouteCommand(message, { forceRebuild: false });
+      return;
+    }
+
+    if (interaction.commandName === "rebuild") {
+      await runManagedRouteCommand(message, { forceRebuild: true });
+      return;
+    }
+
+    if (interaction.commandName === "initrepo") {
+      if (isCommandSupportedForPlatform && !isCommandSupportedForPlatform("initrepo", "discord")) {
+        await safeReply(message, "This platform does not support `initrepo`.");
+        return;
+      }
+      const rest = commandText.replace(/^!initrepo\b/i, "").trim();
+      await handleInitRepoCommand(message, rest);
+      return;
+    }
+
+    if (interaction.commandName === "setpath") {
+      const rest = commandText.replace(/^!setpath\b/i, "").trim();
+      await handleSetPathCommand(message, rest);
+      return;
+    }
+
+    const context = resolveRepoContext(message, {
+      channelSetups: getChannelSetups(),
+      config,
+      generalChannel: {
+        id: generalChannelId,
+        name: generalChannelName,
+        cwd: generalChannelCwd
+      }
+    });
+    if (!context) {
+      await safeReply(message, "This command only works in a managed repo channel or the configured #general channel.");
+      return;
+    }
+
+    await handleCommand(message, commandText, context);
+  }
+
+  async function handleApprovalButtonInteraction(interaction) {
     const parsed = parseApprovalButtonCustomId(interaction.customId, approvalButtonPrefix);
     if (!parsed) {
       return;
@@ -186,10 +268,54 @@ export function createDiscordRuntime(deps) {
     return config.allowedUserIds.includes(userId);
   }
 
+  function isGeneralChannel(channel) {
+    if (!channel) {
+      return false;
+    }
+    if (generalChannelId && channel.id === generalChannelId) {
+      return true;
+    }
+    return String(channel.name ?? "").trim().toLowerCase() === String(generalChannelName ?? "").trim().toLowerCase();
+  }
+
   return {
+    handleChannelCreate,
     handleMessage,
-    handleInteraction
+    handleInteraction,
+    registerSlashCommands
   };
+
+  function shouldAutoInitRepoForChannel(channel) {
+    if (!channel || channel.type !== ChannelType.GuildText) {
+      return false;
+    }
+    if (isGeneralChannel(channel)) {
+      return false;
+    }
+    const parentName = String(
+      channel.parent?.name ?? discord.channels?.cache?.get?.(channel.parentId ?? "")?.name ?? ""
+    )
+      .trim()
+      .toLowerCase();
+    if (!parentName || parentName !== String(projectsCategoryName ?? "").trim().toLowerCase()) {
+      return false;
+    }
+    const topic = String(channel.topic ?? "").trim();
+    if (topic.startsWith(String(managedChannelTopicPrefix ?? ""))) {
+      return false;
+    }
+    return !getChannelSetups()?.[channel.id];
+  }
+
+  function createAutoInitMessageAdapter(channel) {
+    return {
+      id: `auto-init-${channel.id}`,
+      platform: "discord",
+      channel,
+      channelId: channel.id,
+      reply: async (content) => await channel.send(content)
+    };
+  }
 }
 
 function normalizeIncomingContent(content, botUserId) {
@@ -201,4 +327,39 @@ function normalizeIncomingContent(content, botUserId) {
   }
   const mentionPrefix = new RegExp(`^<@!?${botUserId}>\\s*`);
   return content.replace(mentionPrefix, "").trim();
+}
+
+function createInteractionMessageAdapter(interaction) {
+  let hasInitialReply = false;
+
+  return {
+    id: interaction.id,
+    platform: "discord",
+    author: interaction.user,
+    channel: interaction.channel,
+    channelId: interaction.channelId,
+    attachments: new Map(),
+    reply: async (content) => {
+      const payload = normalizeReplyPayload(content);
+      if (!hasInitialReply && interaction.deferred) {
+        hasInitialReply = true;
+        return await interaction.editReply(payload);
+      }
+      if (!hasInitialReply && !interaction.replied) {
+        hasInitialReply = true;
+        return await interaction.reply({ ...payload, fetchReply: true });
+      }
+      return await interaction.followUp(payload);
+    }
+  };
+}
+
+function normalizeReplyPayload(content) {
+  if (typeof content === "string") {
+    return { content };
+  }
+  if (content && typeof content === "object") {
+    return content;
+  }
+  return { content: String(content ?? "") };
 }

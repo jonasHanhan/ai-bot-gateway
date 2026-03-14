@@ -291,6 +291,8 @@ export function createTurnRunner(deps) {
       seenDelta: false,
       currentStatusLine: "⏳ Thinking...",
       lastRenderedContent: "",
+      streamedTextOffset: 0,
+      streamedSummaryText: "",
       completed: false,
       failed: false,
       failureMessage: "",

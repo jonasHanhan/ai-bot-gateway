@@ -5,6 +5,7 @@ type TurnTracker = {
   threadId: string;
   repoChannelId: string;
   channel: {
+    platform?: string;
     isTextBased: () => boolean;
     messages: {
       fetch: () => Promise<null>;
@@ -12,7 +13,9 @@ type TurnTracker = {
   };
   statusMessage: {
     id: string;
+    platform?: string;
     channel: {
+      platform?: string;
       isTextBased: () => boolean;
       messages: {
         fetch: () => Promise<null>;
@@ -40,6 +43,8 @@ type TurnTracker = {
   seenDelta: boolean;
   currentStatusLine: string;
   lastRenderedContent: string;
+  streamedTextOffset: number;
+  streamedSummaryText: string;
   completed: boolean;
   failed: boolean;
   failureMessage: string;
@@ -61,9 +66,11 @@ type CodexNotification = {
   };
 };
 
-function createTracker() {
+function createTracker(options: { platform?: string } = {}) {
   const sentEdits: string[] = [];
+  const platform = options.platform ?? "discord";
   const channel = {
+    platform,
     isTextBased: () => true,
     messages: {
       fetch: async () => null
@@ -75,6 +82,7 @@ function createTracker() {
     channel,
     statusMessage: {
       id: "thinking-1",
+      platform,
       channel,
       edit: async (text: string) => {
         sentEdits.push(text);
@@ -100,6 +108,8 @@ function createTracker() {
     seenDelta: false,
     currentStatusLine: "⏳ Thinking...",
     lastRenderedContent: "",
+    streamedTextOffset: 0,
+    streamedSummaryText: "",
     completed: false,
     failed: false,
     failureMessage: "",
@@ -407,6 +417,343 @@ describe("notification runtime ux flow cutover", () => {
     }
   });
 
+  test("streams agent deltas into the status message before completion", async () => {
+    const activeTurns = new Map<string, TurnTracker>();
+    const tracker = createTracker();
+    tracker.lastFlushAt = Date.now() - 5000;
+    activeTurns.set("thread-1", tracker);
+    const statusEdits: string[] = [];
+    tracker.statusMessage.edit = async (text: string) => {
+      statusEdits.push(text);
+    };
+
+    const runtime = createNotificationRuntime({
+      activeTurns,
+      renderVerbosity: "user",
+      TURN_PHASE: {
+        RUNNING: "running",
+        RECONNECTING: "reconnecting",
+        FINALIZING: "finalizing",
+        FAILED: "failed",
+        DONE: "done"
+      },
+      transitionTurnPhase: () => true,
+      normalizeCodexNotification: (notification: CodexNotification) => {
+        const { method, params } = notification;
+        if (method === "item/agentMessage/delta") {
+          return { kind: "agent_delta", threadId: params.threadId, delta: params.delta };
+        }
+        return { kind: "unknown" };
+      },
+      extractAgentMessageText: () => "",
+      maybeSendAttachmentsForItem: async () => {},
+      maybeSendInferredAttachmentsFromText: async () => 0,
+      recordFileChanges: () => {},
+      summarizeItemForStatus: () => [],
+      extractWebSearchDetails: () => [],
+      buildFileDiffSection: () => "",
+      buildTurnRenderPlan: () => ({ primaryMessage: "", statusMessages: [], attachments: [] }),
+      sendChunkedToChannel: async () => {},
+      normalizeFinalSummaryText: (text: string) => text.trim(),
+      truncateStatusText: (text: string) => text,
+      isTransientReconnectErrorMessage: () => false,
+      safeSendToChannel: async () => null,
+      truncateForDiscordMessage: (text: string) => text,
+      discordMaxMessageLength: 1900,
+      debugLog: () => {},
+      writeHeartbeatFile: async () => {},
+      onTurnFinalized: async () => {}
+    });
+
+    await runtime.handleNotification({
+      method: "item/agentMessage/delta",
+      params: { threadId: "thread-1", delta: "Hello" }
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(statusEdits).toContain("Hello");
+  });
+
+  test("does not resend the first summary chunk when it was already streamed in status message", async () => {
+    const activeTurns = new Map<string, TurnTracker>();
+    const tracker = createTracker();
+    tracker.lastFlushAt = Date.now() - 5000;
+    activeTurns.set("thread-1", tracker);
+    const chunkedMessages: string[] = [];
+    const statusEdits: string[] = [];
+    tracker.statusMessage.edit = async (text: string) => {
+      statusEdits.push(text);
+    };
+
+    const runtime = createNotificationRuntime({
+      activeTurns,
+      renderVerbosity: "user",
+      TURN_PHASE: {
+        RUNNING: "running",
+        RECONNECTING: "reconnecting",
+        FINALIZING: "finalizing",
+        FAILED: "failed",
+        DONE: "done"
+      },
+      transitionTurnPhase: () => true,
+      normalizeCodexNotification: (notification: CodexNotification) => {
+        const { method, params } = notification;
+        if (method === "item/agentMessage/delta") {
+          return { kind: "agent_delta", threadId: params.threadId, delta: params.delta };
+        }
+        if (method === "turn/completed") {
+          return { kind: "turn_completed", threadId: params.threadId };
+        }
+        return { kind: "unknown" };
+      },
+      extractAgentMessageText: () => "",
+      maybeSendAttachmentsForItem: async () => {},
+      maybeSendInferredAttachmentsFromText: async () => 0,
+      recordFileChanges: () => {},
+      summarizeItemForStatus: () => [],
+      extractWebSearchDetails: () => [],
+      buildFileDiffSection: () => "",
+      buildTurnRenderPlan: () => ({ primaryMessage: "", statusMessages: [], attachments: [] }),
+      sendChunkedToChannel: async (_channel: unknown, text: string) => {
+        chunkedMessages.push(text);
+      },
+      normalizeFinalSummaryText: (text: string) => text.trim(),
+      truncateStatusText: (text: string) => text,
+      isTransientReconnectErrorMessage: () => false,
+      safeSendToChannel: async () => null,
+      truncateForDiscordMessage: (text: string) => text,
+      discordMaxMessageLength: 1900,
+      debugLog: () => {},
+      writeHeartbeatFile: async () => {},
+      onTurnFinalized: async () => {},
+      turnCompletionQuietMs: 5,
+      turnCompletionMaxWaitMs: 100
+    });
+
+    await runtime.handleNotification({
+      method: "item/agentMessage/delta",
+      params: { threadId: "thread-1", delta: "Streamed final answer" }
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await runtime.handleNotification({
+      method: "turn/completed",
+      params: { threadId: "thread-1" }
+    });
+    await new Promise((resolve) => setTimeout(resolve, 40));
+
+    expect(statusEdits.some((value) => value.includes("Streamed final answer"))).toBe(true);
+    expect(chunkedMessages).toEqual([]);
+  });
+
+  test("streams Feishu deltas as segmented messages instead of editing the status message", async () => {
+    const activeTurns = new Map<string, TurnTracker>();
+    const tracker = createTracker({ platform: "feishu" });
+    tracker.lastFlushAt = Date.now() - 5000;
+    activeTurns.set("thread-1", tracker);
+    const streamedMessages: string[] = [];
+    const statusEdits: string[] = [];
+    tracker.statusMessage.edit = async (text: string) => {
+      statusEdits.push(text);
+    };
+
+    const runtime = createNotificationRuntime({
+      activeTurns,
+      renderVerbosity: "user",
+      TURN_PHASE: {
+        RUNNING: "running",
+        RECONNECTING: "reconnecting",
+        FINALIZING: "finalizing",
+        FAILED: "failed",
+        DONE: "done"
+      },
+      transitionTurnPhase: () => true,
+      normalizeCodexNotification: (notification: CodexNotification) => {
+        const { method, params } = notification;
+        if (method === "item/agentMessage/delta") {
+          return { kind: "agent_delta", threadId: params.threadId, delta: params.delta };
+        }
+        return { kind: "unknown" };
+      },
+      extractAgentMessageText: () => "",
+      maybeSendAttachmentsForItem: async () => {},
+      maybeSendInferredAttachmentsFromText: async () => 0,
+      recordFileChanges: () => {},
+      summarizeItemForStatus: () => [],
+      extractWebSearchDetails: () => [],
+      buildFileDiffSection: () => "",
+      buildTurnRenderPlan: () => ({ primaryMessage: "", statusMessages: [], attachments: [] }),
+      sendChunkedToChannel: async () => {},
+      normalizeFinalSummaryText: (text: string) => text.trim(),
+      truncateStatusText: (text: string) => text,
+      isTransientReconnectErrorMessage: () => false,
+      safeSendToChannel: async (_channel: unknown, text: string) => {
+        streamedMessages.push(text);
+        return { id: `feishu-stream-${streamedMessages.length}` };
+      },
+      truncateForDiscordMessage: (text: string) => text,
+      discordMaxMessageLength: 1900,
+      debugLog: () => {},
+      writeHeartbeatFile: async () => {},
+      onTurnFinalized: async () => {}
+    });
+
+    await runtime.handleNotification({
+      method: "item/agentMessage/delta",
+      params: { threadId: "thread-1", delta: "Feishu streaming works." }
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(streamedMessages).toEqual(["Feishu streaming works."]);
+    expect(statusEdits.some((value) => value.includes("Feishu streaming works."))).toBe(false);
+  });
+
+  test("sends only the remaining Feishu summary tail on finalize after streamed segments", async () => {
+    const activeTurns = new Map<string, TurnTracker>();
+    const tracker = createTracker({ platform: "feishu" });
+    tracker.lastFlushAt = Date.now() - 5000;
+    activeTurns.set("thread-1", tracker);
+    const streamedMessages: string[] = [];
+    const chunkedMessages: string[] = [];
+
+    const runtime = createNotificationRuntime({
+      activeTurns,
+      renderVerbosity: "user",
+      TURN_PHASE: {
+        RUNNING: "running",
+        RECONNECTING: "reconnecting",
+        FINALIZING: "finalizing",
+        FAILED: "failed",
+        DONE: "done"
+      },
+      transitionTurnPhase: () => true,
+      normalizeCodexNotification: (notification: CodexNotification) => {
+        const { method, params } = notification;
+        if (method === "item/agentMessage/delta") {
+          return { kind: "agent_delta", threadId: params.threadId, delta: params.delta };
+        }
+        if (method === "turn/completed") {
+          return { kind: "turn_completed", threadId: params.threadId };
+        }
+        return { kind: "unknown" };
+      },
+      extractAgentMessageText: () => "",
+      maybeSendAttachmentsForItem: async () => {},
+      maybeSendInferredAttachmentsFromText: async () => 0,
+      recordFileChanges: () => {},
+      summarizeItemForStatus: () => [],
+      extractWebSearchDetails: () => [],
+      buildFileDiffSection: () => "",
+      buildTurnRenderPlan: () => ({ primaryMessage: "", statusMessages: [], attachments: [] }),
+      sendChunkedToChannel: async (_channel: unknown, text: string) => {
+        chunkedMessages.push(text);
+      },
+      normalizeFinalSummaryText: (text: string) => text.trim(),
+      truncateStatusText: (text: string) => text,
+      isTransientReconnectErrorMessage: () => false,
+      safeSendToChannel: async (_channel: unknown, text: string) => {
+        streamedMessages.push(text);
+        return { id: `feishu-stream-${streamedMessages.length}` };
+      },
+      truncateForDiscordMessage: (text: string) => text,
+      discordMaxMessageLength: 1900,
+      debugLog: () => {},
+      writeHeartbeatFile: async () => {},
+      onTurnFinalized: async () => {},
+      turnCompletionQuietMs: 5,
+      turnCompletionMaxWaitMs: 100
+    });
+
+    await runtime.handleNotification({
+      method: "item/agentMessage/delta",
+      params: { threadId: "thread-1", delta: "Feishu prefix." }
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await runtime.handleNotification({
+      method: "item/agentMessage/delta",
+      params: { threadId: "thread-1", delta: " tail" }
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await runtime.handleNotification({
+      method: "turn/completed",
+      params: { threadId: "thread-1" }
+    });
+    await new Promise((resolve) => setTimeout(resolve, 40));
+
+    expect(streamedMessages).toEqual(["Feishu prefix."]);
+    expect(chunkedMessages).toEqual([" tail"]);
+  });
+
+  test("retries Feishu summary content on finalize when a streamed segment send is dropped", async () => {
+    const activeTurns = new Map<string, TurnTracker>();
+    const tracker = createTracker({ platform: "feishu" });
+    tracker.lastFlushAt = Date.now() - 5000;
+    activeTurns.set("thread-1", tracker);
+    const streamedMessages: string[] = [];
+    const chunkedMessages: string[] = [];
+
+    const runtime = createNotificationRuntime({
+      activeTurns,
+      renderVerbosity: "user",
+      TURN_PHASE: {
+        RUNNING: "running",
+        RECONNECTING: "reconnecting",
+        FINALIZING: "finalizing",
+        FAILED: "failed",
+        DONE: "done"
+      },
+      transitionTurnPhase: () => true,
+      normalizeCodexNotification: (notification: CodexNotification) => {
+        const { method, params } = notification;
+        if (method === "item/agentMessage/delta") {
+          return { kind: "agent_delta", threadId: params.threadId, delta: params.delta };
+        }
+        if (method === "turn/completed") {
+          return { kind: "turn_completed", threadId: params.threadId };
+        }
+        return { kind: "unknown" };
+      },
+      extractAgentMessageText: () => "",
+      maybeSendAttachmentsForItem: async () => {},
+      maybeSendInferredAttachmentsFromText: async () => 0,
+      recordFileChanges: () => {},
+      summarizeItemForStatus: () => [],
+      extractWebSearchDetails: () => [],
+      buildFileDiffSection: () => "",
+      buildTurnRenderPlan: () => ({ primaryMessage: "", statusMessages: [], attachments: [] }),
+      sendChunkedToChannel: async (_channel: unknown, text: string) => {
+        chunkedMessages.push(text);
+      },
+      normalizeFinalSummaryText: (text: string) => text,
+      truncateStatusText: (text: string) => text,
+      isTransientReconnectErrorMessage: () => false,
+      safeSendToChannel: async (_channel: unknown, text: string) => {
+        streamedMessages.push(text);
+        return null;
+      },
+      truncateForDiscordMessage: (text: string) => text,
+      discordMaxMessageLength: 1900,
+      debugLog: () => {},
+      writeHeartbeatFile: async () => {},
+      onTurnFinalized: async () => {},
+      turnCompletionQuietMs: 5,
+      turnCompletionMaxWaitMs: 100
+    });
+
+    await runtime.handleNotification({
+      method: "item/agentMessage/delta",
+      params: { threadId: "thread-1", delta: "Feishu dropped segment." }
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await runtime.handleNotification({
+      method: "turn/completed",
+      params: { threadId: "thread-1" }
+    });
+    await new Promise((resolve) => setTimeout(resolve, 40));
+
+    expect(streamedMessages).toEqual(["Feishu dropped segment."]);
+    expect(chunkedMessages).toEqual(["Feishu dropped segment."]);
+  });
+
   test("stops thinking timer once tool work begins", async () => {
     const activeTurns = new Map<string, TurnTracker>();
     const tracker = createTracker();
@@ -596,6 +943,10 @@ describe("notification runtime ux flow cutover", () => {
     const tracker = createTracker();
     activeTurns.set("thread-1", tracker);
     const chunkedMessages: string[] = [];
+    const statusEdits: string[] = [];
+    tracker.statusMessage.edit = async (text: string) => {
+      statusEdits.push(text);
+    };
 
     const runtime = createNotificationRuntime({
       activeTurns,
@@ -659,7 +1010,8 @@ describe("notification runtime ux flow cutover", () => {
 
     await new Promise((resolve) => setTimeout(resolve, 80));
 
-    expect(chunkedMessages).toEqual(["I’ll check the existing"]);
+    expect(statusEdits.some((value) => value.includes("I’ll check the existing"))).toBe(true);
+    expect(chunkedMessages).toEqual([]);
     expect(activeTurns.has("thread-1")).toBe(false);
   });
 });

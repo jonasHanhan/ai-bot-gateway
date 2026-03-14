@@ -26,7 +26,8 @@ export function createCommandRouter(deps) {
     applyApprovalDecision,
     safeReply,
     getChannelSetups,
-    setChannelSetups
+    setChannelSetups,
+    getPlatformRegistry
   } = deps;
 
   async function handleCommand(message, content, context) {
@@ -35,35 +36,7 @@ export function createCommandRouter(deps) {
     const rest = restParts.join(" ").trim();
 
     if (command === "!help") {
-      await safeReply(
-        message,
-        [
-          "Commands:",
-          "`!initrepo [force]` create/bind repo for this channel using channel name",
-          "`!mkchannel <name>` create a new text channel",
-          "`!mkrepo <name>` create a new text channel and bind a new project directory under DISCORD_REPO_ROOT",
-          "`!mkbind <name> <absolute-path>` create a new text channel and bind it to a repo/path",
-          "`!bind <absolute-path>` bind this channel to an existing repo/path",
-          "`!rebind <absolute-path>` rebind this channel to a different existing repo/path",
-          "`!unbind` remove repo binding from this channel",
-          "`!setmodel <model>` set an explicit model override for this channel",
-          "`!clearmodel` remove this channel's explicit model override and use the default model",
-          "`!ask <prompt>` send prompt in this repo channel",
-          "`!status` show queue/thread status for this channel",
-          "`!new` reset Codex thread binding for this channel",
-          "`!restart [reason]` request host-managed restart and confirm when back",
-          "`!interrupt` interrupt current turn in this channel",
-          "`!where` show bot runtime paths and binding details",
-          "`!approve [id]` approve the latest (or specified) pending request",
-          "`!decline [id]` decline the latest (or specified) pending request",
-          "`!cancel [id]` cancel the latest (or specified) pending request",
-          "`!resync` non-destructive sync with Codex projects",
-          "`!rebuild` destructive rebuild of managed channels",
-          "Tip: use the Approve/Decline/Cancel buttons on approval messages",
-          "Model: one repo text channel = one persistent Codex thread",
-          "Also supported in #general: plain chat and !commands (read-only, no file writes)"
-        ].join("\n")
-      );
+      await safeReply(message, getHelpText({ platformId: inferPlatformId(message) }));
       return;
     }
 
@@ -84,6 +57,11 @@ export function createCommandRouter(deps) {
         setup: context.setup,
         repoChannelId: context.repoChannelId
       });
+      return;
+    }
+
+    if (command === "!setpath") {
+      await handleSetPathCommand(message, rest, context);
       return;
     }
 
@@ -254,6 +232,115 @@ export function createCommandRouter(deps) {
     await safeReply(message, "Unknown command. Use `!help`.");
   }
 
+  async function runManagedRouteCommand(message, options = {}) {
+    const { forceRebuild = false } = options;
+    const registry = resolvePlatformRegistry();
+    if (!registry?.anyPlatformSupports?.("supportsAutoDiscovery")) {
+      await safeReply(message, "No configured platform currently supports managed route sync.");
+      return;
+    }
+
+    try {
+      const summaries = await registry.bootstrapRoutes({ forceRebuild });
+      const primary = summaries.find((summary) => summary?.platformId === "discord") ?? summaries[0] ?? null;
+      if (!primary) {
+        await safeReply(message, "No managed route changes were needed.");
+        return;
+      }
+      await safeReply(message, formatManagedRouteSummary(primary, Object.keys(getChannelSetups()).length, forceRebuild));
+    } catch (error) {
+      await safeReply(message, `${forceRebuild ? "Rebuild" : "Resync"} failed: ${error.message}`);
+    }
+  }
+
+  function getHelpText(options = {}) {
+    const platformId = String(options.platformId ?? "discord").trim().toLowerCase() || "discord";
+    const registry = resolvePlatformRegistry();
+    const prefix = platformId === "feishu" ? "/" : "!";
+    const capabilities = registry?.getCapabilities?.(platformId) ?? {};
+    const supportsSlashCommands = capabilities.supportsSlashCommands === true;
+    const supportsButtons = capabilities.supportsButtons === true;
+    const supportsRepoBootstrap = capabilities.supportsRepoBootstrap === true;
+    const supportsAutoDiscovery = registry?.anyPlatformSupports?.("supportsAutoDiscovery") ?? platformId === "discord";
+    const isDiscordPlatform = platformId === "discord";
+
+    const lines = [
+      supportsSlashCommands ? "Commands (use `!command` or `/command`):" : `Commands (use \`${prefix}command\`):`
+    ];
+
+    if (supportsRepoBootstrap) {
+      lines.push(`\`${prefix}initrepo [force]\` create/bind repo for this channel using channel name`);
+    }
+    if (isDiscordPlatform) {
+      lines.push(`\`${prefix}mkchannel <name>\` create a new text channel`);
+      lines.push(
+        `\`${prefix}mkrepo <name>\` create a new text channel and bind a new project directory under DISCORD_REPO_ROOT`
+      );
+      lines.push(`\`${prefix}mkbind <name> <absolute-path>\` create a new text channel and bind it to a repo/path`);
+      lines.push(`\`${prefix}bind <absolute-path>\` bind this channel to an existing repo/path`);
+      lines.push(`\`${prefix}rebind <absolute-path>\` rebind this channel to a different existing repo/path`);
+      lines.push(`\`${prefix}unbind\` remove repo binding from this channel`);
+      lines.push(`\`${prefix}setmodel <model>\` set an explicit model override for this channel`);
+      lines.push(`\`${prefix}clearmodel\` remove this channel's explicit model override and use the default model`);
+    }
+    lines.push(`\`${prefix}setpath <abs-path>\` bind this chat to an existing repo path`);
+    lines.push(`\`${prefix}ask <prompt>\` send prompt in this repo channel`);
+    lines.push(`\`${prefix}status\` show queue/thread status for this channel`);
+    lines.push(`\`${prefix}new\` reset Codex thread binding for this channel`);
+    lines.push(`\`${prefix}restart [reason]\` request host-managed restart and confirm when back`);
+    lines.push(`\`${prefix}interrupt\` interrupt current turn in this channel`);
+    lines.push(`\`${prefix}where\` show bot runtime paths and binding details`);
+    lines.push(`\`${prefix}approve [id]\` approve the latest (or specified) pending request`);
+    lines.push(`\`${prefix}decline [id]\` decline the latest (or specified) pending request`);
+    lines.push(`\`${prefix}cancel [id]\` cancel the latest (or specified) pending request`);
+    if (supportsAutoDiscovery) {
+      lines.push(`\`${prefix}resync\` non-destructive sync with managed project routes`);
+      lines.push(`\`${prefix}rebuild\` destructive rebuild of managed project routes`);
+    }
+    if (supportsButtons) {
+      lines.push("Tip: use the Approve/Decline/Cancel buttons on approval messages");
+    }
+    lines.push("Model: one chat route = one persistent Codex thread");
+    lines.push("Also supported in #general-style chats: plain chat and commands (read-only, no file writes)");
+
+    if (!supportsRepoBootstrap && platformId === "feishu") {
+      lines.push("Feishu repo chat bindings are config-driven via `config/channels.json` keys like `feishu:oc_xxx`.");
+    }
+    if (platformId === "feishu") {
+      lines.push("Group chats default to command messages or messages that @mention the bot.");
+    }
+
+    return lines.join("\n");
+  }
+
+  function isCommandSupportedForPlatform(commandName, platformId) {
+    const normalizedCommandName = String(commandName ?? "").trim().toLowerCase();
+    const normalizedPlatformId = String(platformId ?? "").trim().toLowerCase();
+    const registry = resolvePlatformRegistry();
+    if (!registry) {
+      return normalizedPlatformId !== "feishu" || !DISCORD_ONLY_COMMANDS.has(normalizedCommandName);
+    }
+
+    if (normalizedCommandName === "initrepo") {
+      return registry.platformSupports?.(normalizedPlatformId, "supportsRepoBootstrap") ?? false;
+    }
+    if (normalizedCommandName === "resync" || normalizedCommandName === "rebuild") {
+      return registry.anyPlatformSupports?.("supportsAutoDiscovery") ?? false;
+    }
+    if (DISCORD_ONLY_COMMANDS.has(normalizedCommandName)) {
+      return normalizedPlatformId === "discord";
+    }
+    return true;
+  }
+
+  function resolvePlatformRegistry() {
+    return typeof getPlatformRegistry === "function" ? getPlatformRegistry() : null;
+  }
+
+  function inferPlatformId(message) {
+    return String(message?.platform ?? "discord").trim().toLowerCase() || "discord";
+  }
+
   async function handleInitRepoCommand(message, rest) {
     if (message.channel.type !== ChannelType.GuildText) {
       await safeReply(message, "`!initrepo` is only available in server text channels.");
@@ -300,6 +387,86 @@ export function createCommandRouter(deps) {
     await safeReply(
       message,
       `Initialized repo \`${repoName}\` at \`${repoPath}\` and bound this channel.`
+    );
+  }
+
+  async function handleSetPathCommand(message, rest, context = null) {
+    const routeId = String(message?.channelId ?? "").trim();
+    if (!routeId) {
+      await safeReply(message, "Unable to determine the current chat route.");
+      return;
+    }
+
+    const rawPath = String(rest ?? "").trim();
+    if (!rawPath) {
+      await safeReply(message, "Usage: `!setpath /absolute/path/to/repo`");
+      return;
+    }
+
+    const targetPath = path.resolve(rawPath);
+    let stats = null;
+    try {
+      stats = await fs.stat(targetPath);
+    } catch {
+      await safeReply(message, `Path does not exist: \`${targetPath}\``);
+      return;
+    }
+    if (typeof stats?.isDirectory === "function" && !stats.isDirectory()) {
+      await safeReply(message, `Path is not a directory: \`${targetPath}\``);
+      return;
+    }
+
+    const channelSetups = getChannelSetups();
+    const existingSetup = channelSetups[routeId] ?? null;
+    if (existingSetup?.cwd === targetPath) {
+      await safeReply(message, `This chat is already bound to \`${targetPath}\`.`);
+      return;
+    }
+
+    const nextSetup = {
+      cwd: targetPath,
+      model:
+        existingSetup?.model ??
+        config.channels?.[routeId]?.model ??
+        context?.setup?.model ??
+        config.defaultModel
+    };
+
+    await persistChannelSetupToConfig(fs, path, configPath, routeId, nextSetup);
+
+    const nextSetups = {
+      ...channelSetups,
+      [routeId]: nextSetup
+    };
+    setChannelSetups(nextSetups);
+
+    if (config.channels && typeof config.channels === "object") {
+      config.channels[routeId] = { ...nextSetup };
+    }
+
+    state.clearBinding(routeId);
+    await state.save();
+
+    if (
+      message?.channel?.type === ChannelType.GuildText &&
+      typeof message?.channel?.setTopic === "function" &&
+      managedChannelTopicPrefix
+    ) {
+      const nextTopic = upsertTopicTag(message.channel.topic, managedChannelTopicPrefix, targetPath);
+      if (nextTopic !== message.channel.topic) {
+        await message.channel.setTopic(nextTopic).catch((error) => {
+          console.warn(`failed setting channel topic for ${routeId}: ${error.message}`);
+        });
+      }
+    }
+
+    await safeReply(
+      message,
+      [
+        `Bound this chat to \`${targetPath}\`.`,
+        "Cleared the existing Codex thread binding.",
+        "Next prompt will start a new Codex thread in the new working path."
+      ].join("\n")
     );
   }
 
@@ -519,13 +686,35 @@ export function createCommandRouter(deps) {
   }
 
   return {
+    getHelpText,
+    isCommandSupportedForPlatform,
+    runManagedRouteCommand,
     handleCommand,
     handleInitRepoCommand,
+    handleSetPathCommand,
     handleMakeChannelCommand,
     handleBindCommand,
     handleUnbindCommand
   };
 }
+
+function formatManagedRouteSummary(summary, mappedCount, forceRebuild) {
+  if (forceRebuild) {
+    return `Rebuilt channels. nuked_channels=${summary.deletedChannels}, nuked_categories=${summary.deletedCategories}, cleared_bindings=${summary.clearedBindings}, discovered=${summary.discoveredCwds}, created=${summary.createdChannels}, moved=${summary.movedChannels}, pruned=${summary.prunedBindings}, mapped=${mappedCount}`;
+  }
+  return `Resynced channels. discovered=${summary.discoveredCwds}, created=${summary.createdChannels}, moved=${summary.movedChannels}, pruned=${summary.prunedBindings}, mapped=${mappedCount}`;
+}
+
+const DISCORD_ONLY_COMMANDS = new Set([
+  "mkchannel",
+  "mkrepo",
+  "mkbind",
+  "bind",
+  "rebind",
+  "unbind",
+  "setmodel",
+  "clearmodel"
+]);
 
 function upsertTopicTag(topic, prefix, value) {
   const safeValue = String(value ?? "").trim();

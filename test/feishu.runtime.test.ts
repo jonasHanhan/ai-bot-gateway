@@ -609,4 +609,161 @@ describe("feishu runtime", () => {
     expect(sentBodies[1]?.msgType).toBe("image");
     expect(sentBodies[1]?.content).toContain("img_uploaded_1");
   });
+
+  test("uploads outbound file attachments for Feishu channels", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "feishu-outbound-file-"));
+    const filePath = path.join(tempDir, "notes.txt");
+    await fs.writeFile(filePath, Buffer.from("hello from codex"));
+
+    const sentBodies: Array<{ msgType?: string; content?: string }> = [];
+    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/tenant_access_token/internal")) {
+        return new Response(JSON.stringify({ code: 0, tenant_access_token: "tenant-token", expire: 7200 }), {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        });
+      }
+      if (url.endsWith("/open-apis/im/v1/files")) {
+        return new Response(JSON.stringify({ code: 0, data: { file_key: "file_uploaded_1" } }), {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        });
+      }
+      if (url.includes("/open-apis/im/v1/messages?receive_id_type=chat_id")) {
+        const body = JSON.parse(String(init?.body ?? "{}"));
+        sentBodies.push({ msgType: body.msg_type, content: body.content });
+        return new Response(JSON.stringify({ code: 0, data: { message_id: `om_file_${sentBodies.length}` } }), {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        });
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    };
+
+    const runtime = createFeishuRuntime({
+      config: {
+        defaultModel: "gpt-5.3-codex",
+        sandboxMode: "workspace-write",
+        allowedFeishuUserIds: []
+      },
+      runtimeEnv: {
+        feishuEnabled: true,
+        feishuAppId: "cli_test",
+        feishuAppSecret: "secret",
+        feishuVerificationToken: "",
+        feishuTransport: "long-connection",
+        feishuPort: 8788,
+        feishuHost: "127.0.0.1",
+        feishuWebhookPath: "/feishu/events",
+        imageCacheDir: tempDir,
+        feishuGeneralChatId: "",
+        feishuGeneralCwd: "/tmp/general",
+        feishuRequireMentionInGroup: false
+      },
+      getChannelSetups: () => ({}),
+      runManagedRouteCommand: async () => {},
+      getHelpText: () => "help text",
+      isCommandSupportedForPlatform: () => false,
+      handleCommand: async () => {},
+      runtimeAdapters: {
+        buildTurnInputFromMessage: async () => [],
+        enqueuePrompt: () => {}
+      },
+      safeReply: async () => null
+    });
+
+    const channel = await runtime.fetchChannelByRouteId("feishu:oc_outbound_file_1");
+    expect(channel).toBeTruthy();
+    await channel.send({
+      content: "Attachment (command execution): `notes.txt`",
+      files: [{ attachment: filePath, name: "notes.txt" }]
+    });
+
+    expect(sentBodies).toHaveLength(2);
+    expect(sentBodies[0]?.msgType).toBe("text");
+    expect(sentBodies[0]?.content).toContain("notes.txt");
+    expect(sentBodies[1]?.msgType).toBe("file");
+    expect(sentBodies[1]?.content).toContain("file_uploaded_1");
+  });
+
+  test("uploads svg attachments as Feishu files instead of image messages", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "feishu-outbound-svg-"));
+    const filePath = path.join(tempDir, "generated-image.svg");
+    await fs.writeFile(filePath, "<svg xmlns=\"http://www.w3.org/2000/svg\"></svg>");
+
+    const sentBodies: Array<{ msgType?: string; content?: string }> = [];
+    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/tenant_access_token/internal")) {
+        return new Response(JSON.stringify({ code: 0, tenant_access_token: "tenant-token", expire: 7200 }), {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        });
+      }
+      if (url.endsWith("/open-apis/im/v1/files")) {
+        return new Response(JSON.stringify({ code: 0, data: { file_key: "file_uploaded_svg" } }), {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        });
+      }
+      if (url.endsWith("/open-apis/im/v1/images")) {
+        throw new Error("svg should not go through image upload");
+      }
+      if (url.includes("/open-apis/im/v1/messages?receive_id_type=chat_id")) {
+        const body = JSON.parse(String(init?.body ?? "{}"));
+        sentBodies.push({ msgType: body.msg_type, content: body.content });
+        return new Response(JSON.stringify({ code: 0, data: { message_id: `om_svg_${sentBodies.length}` } }), {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        });
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    };
+
+    const runtime = createFeishuRuntime({
+      config: {
+        defaultModel: "gpt-5.3-codex",
+        sandboxMode: "workspace-write",
+        allowedFeishuUserIds: []
+      },
+      runtimeEnv: {
+        feishuEnabled: true,
+        feishuAppId: "cli_test",
+        feishuAppSecret: "secret",
+        feishuVerificationToken: "",
+        feishuTransport: "long-connection",
+        feishuPort: 8788,
+        feishuHost: "127.0.0.1",
+        feishuWebhookPath: "/feishu/events",
+        imageCacheDir: tempDir,
+        feishuGeneralChatId: "",
+        feishuGeneralCwd: "/tmp/general",
+        feishuRequireMentionInGroup: false
+      },
+      getChannelSetups: () => ({}),
+      runManagedRouteCommand: async () => {},
+      getHelpText: () => "help text",
+      isCommandSupportedForPlatform: () => false,
+      handleCommand: async () => {},
+      runtimeAdapters: {
+        buildTurnInputFromMessage: async () => [],
+        enqueuePrompt: () => {}
+      },
+      safeReply: async () => null
+    });
+
+    const channel = await runtime.fetchChannelByRouteId("feishu:oc_outbound_svg_1");
+    expect(channel).toBeTruthy();
+    await channel.send({
+      content: "Attachment (image view): `generated-image.svg`",
+      files: [{ attachment: filePath, name: "generated-image.svg" }]
+    });
+
+    expect(sentBodies).toHaveLength(2);
+    expect(sentBodies[0]?.msgType).toBe("text");
+    expect(sentBodies[0]?.content).toContain("generated-image.svg");
+    expect(sentBodies[1]?.msgType).toBe("file");
+    expect(sentBodies[1]?.content).toContain("file_uploaded_svg");
+  });
 });
