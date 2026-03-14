@@ -829,3 +829,4 @@ describe("feishu runtime", () => {
     expect(sentBodies[0]?.content).not.toContain("[32m");
     expect(sentBodies[0]?.content).not.toContain("[31m");
   });
+});

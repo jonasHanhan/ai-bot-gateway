@@ -4,6 +4,7 @@ import { startBridgeRuntime } from "./startup.js";
 import { wireBridgeListeners } from "./wireListeners.js";
 import { createRuntimeOpsContext } from "./createRuntimeOpsContext.js";
 import { attachBuiltRuntimes } from "./attachBuiltRuntimes.js";
+import { registerRuntimeErrorGuards } from "./runtimeErrorGuards.js";
 
 export async function runBridgeProcess(context) {
   const {
@@ -72,6 +73,9 @@ export async function runBridgeProcess(context) {
     stopBackendRuntime: () => backendRuntime?.stop?.(),
     stopPlatformRuntimes: () => platformRegistry?.stop?.(),
     stopHeartbeatLoop: () => refs.runtimeOps?.stopHeartbeatLoop()
+  });
+  registerRuntimeErrorGuards({
+    shutdown: refs.shutdown
   });
   await startBridgeRuntime({
     codex,

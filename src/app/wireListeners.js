@@ -45,6 +45,12 @@ export function wireBridgeListeners({
   discord.on("clientReady", () => {
     console.log(`Discord connected as ${discord.user?.tag}`);
   });
+  discord.on("error", (error) => {
+    console.error(`discord client error: ${error.message}`);
+  });
+  discord.on("shardError", (error, shardId) => {
+    console.error(`discord shard error (shard=${shardId}): ${error.message}`);
+  });
 
   discord.on("messageCreate", (message) => {
     runDetached(`message handler failed in channel ${message.channelId}`, () => handleMessage(message));

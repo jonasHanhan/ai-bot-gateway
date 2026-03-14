@@ -72,7 +72,15 @@ export function createPlatformRegistry(platforms) {
       if (typeof platform.start !== "function") {
         continue;
       }
-      summaries.push(await platform.start());
+      try {
+        summaries.push(await platform.start());
+      } catch (error) {
+        summaries.push({
+          platformId: platform.platformId,
+          started: false,
+          startError: error
+        });
+      }
     }
     return summaries;
   }
