@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Health check script for PM2
+# Health check script for the local bridge HTTP endpoint
 # Returns 0 if healthy, 1 if unhealthy
 
 MAX_RETRIES=3

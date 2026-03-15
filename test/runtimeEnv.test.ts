@@ -106,6 +106,12 @@ describe("runtime env", () => {
     expect(env.heartbeatIntervalMs).toBe(30000);
   });
 
+  test("defaults Feishu unbound chat mode to open", () => {
+    const env = loadRuntimeEnv();
+
+    expect(env.feishuUnboundChatMode).toBe("open");
+  });
+
   test("normalizes Feishu unbound chat mode and cwd", () => {
     process.env.FEISHU_UNBOUND_CHAT_MODE = "all";
     process.env.FEISHU_UNBOUND_CHAT_CWD = "/tmp/feishu-open";

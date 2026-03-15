@@ -1,4 +1,5 @@
 import process from "node:process";
+import { isIgnorableDiscordGatewayError } from "./runtimeErrorGuards.js";
 
 export function registerShutdownSignals(shutdown) {
   process.on("SIGINT", () => {
@@ -9,6 +10,10 @@ export function registerShutdownSignals(shutdown) {
   });
   process.on("unhandledRejection", (reason) => {
     console.error(`[process] unhandledRejection: ${formatProcessError(reason)}`);
+    if (isIgnorableDiscordGatewayError(reason)) {
+      console.warn(`[process] ignoring Discord gateway unhandledRejection: ${String(reason?.message ?? reason)}`);
+      return;
+    }
     if (!shouldGracefullyShutdownForRejection(reason)) {
       return;
     }
@@ -16,6 +21,10 @@ export function registerShutdownSignals(shutdown) {
   });
   process.on("uncaughtException", (error) => {
     console.error(`[process] uncaughtException: ${formatProcessError(error)}`);
+    if (isIgnorableDiscordGatewayError(error)) {
+      console.warn(`[process] ignoring Discord gateway uncaughtException: ${String(error?.message ?? error)}`);
+      return;
+    }
     void shutdown?.(1);
   });
 }

@@ -33,6 +33,7 @@ export function createTurnRecoveryStore(deps) {
   const maxRequests = Number.isFinite(Number(process.env.TURN_REQUEST_STATUS_MAX_RECORDS))
     ? Math.max(MIN_MAX_REQUESTS, Math.floor(Number(process.env.TURN_REQUEST_STATUS_MAX_RECORDS)))
     : DEFAULT_MAX_REQUESTS;
+  const recoveryNotifyEnabled = process.env.TURN_RECOVERY_NOTIFY !== "0";
   let saveQueue = Promise.resolve();
   let threadListCache = null;
   let threadListCacheTime = 0;
@@ -257,16 +258,6 @@ export function createTurnRecoveryStore(deps) {
         }
 
         const threadKnown = knownThreads.status === "available" ? knownThreads.ids.has(turn.threadId) : null;
-        const settlementText =
-          threadKnown === true
-            ? "🔄 Recovered after restart. Previous in-flight turn may still settle. If no follow-up appears, retry your last message."
-            : threadKnown === false
-              ? "⚠️ Recovered after restart. Previous in-flight turn could not be resumed safely. Please retry."
-              : "⚠️ Recovered after restart. Previous in-flight turn status could not be verified safely. Please retry if no follow-up appears.";
-        const settlementWithRequestId = turn.requestId
-          ? `${settlementText}\nrequest_id: \`${turn.requestId}\``
-          : settlementText;
-
         if (threadKnown === true) {
           resumedKnown += 1;
           recoveryStatus = "recovery_resumed";
@@ -293,23 +284,35 @@ export function createTurnRecoveryStore(deps) {
         };
         await save();
 
-        let edited = false;
-        if (turn.statusMessageId) {
-          try {
-            const message = await channel.messages.fetch(turn.statusMessageId);
-            if (message) {
-              await message.edit(settlementWithRequestId);
-              edited = true;
+        if (recoveryNotifyEnabled) {
+          const settlementText =
+            threadKnown === true
+              ? "🔄 Recovered after restart. Previous in-flight turn may still settle. If no follow-up appears, retry your last message."
+              : threadKnown === false
+                ? "⚠️ Recovered after restart. Previous in-flight turn could not be resumed safely. Please retry."
+                : "⚠️ Recovered after restart. Previous in-flight turn status could not be verified safely. Please retry if no follow-up appears.";
+          const settlementWithRequestId = turn.requestId
+            ? `${settlementText}\nrequest_id: \`${turn.requestId}\``
+            : settlementText;
+
+          let edited = false;
+          if (turn.statusMessageId) {
+            try {
+              const message = await channel.messages.fetch(turn.statusMessageId);
+              if (message) {
+                await message.edit(settlementWithRequestId);
+                edited = true;
+              }
+            } catch (editError) {
+              console.error(`Failed to edit status message for turn ${turn.threadId}: ${editError.message}`);
             }
-          } catch (editError) {
-            console.error(`Failed to edit status message for turn ${turn.threadId}: ${editError.message}`);
           }
-        }
-        if (!edited) {
-          try {
-            await safeSendToChannel(channel, settlementWithRequestId);
-          } catch (sendError) {
-            console.error(`Failed to send settlement message for turn ${turn.threadId}: ${sendError.message}`);
+          if (!edited) {
+            try {
+              await safeSendToChannel(channel, settlementWithRequestId);
+            } catch (sendError) {
+              console.error(`Failed to send settlement message for turn ${turn.threadId}: ${sendError.message}`);
+            }
           }
         }
 

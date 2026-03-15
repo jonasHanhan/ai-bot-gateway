@@ -89,6 +89,83 @@ describe("feishu runtime", () => {
     expect(replies[0]).toContain("binding: none");
   });
 
+  test("returns default workspace details for /where when unbound chats are open", async () => {
+    const replies: string[] = [];
+    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/tenant_access_token/internal")) {
+        return new Response(JSON.stringify({ code: 0, tenant_access_token: "tenant-token", expire: 7200 }), {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        });
+      }
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      replies.push(body.content ?? "");
+      return new Response(JSON.stringify({ code: 0, data: { message_id: "om_reply_where_open" } }), {
+        status: 200,
+        headers: { "content-type": "application/json" }
+      });
+    };
+
+    const runtime = createFeishuRuntime({
+      config: {
+        defaultModel: "gpt-5.3-codex",
+        sandboxMode: "workspace-write",
+        allowedFeishuUserIds: []
+      },
+      runtimeEnv: {
+        feishuEnabled: true,
+        feishuAppId: "cli_test",
+        feishuAppSecret: "secret",
+        feishuVerificationToken: "",
+        feishuPort: 8788,
+        feishuHost: "127.0.0.1",
+        feishuWebhookPath: "/feishu/events",
+        feishuGeneralChatId: "",
+        feishuGeneralCwd: "/tmp/general",
+        feishuRequireMentionInGroup: false,
+        feishuUnboundChatMode: "open",
+        feishuUnboundChatCwd: "/tmp/open-feishu"
+      },
+      getChannelSetups: () => ({}),
+      runManagedRouteCommand: async () => {},
+      getHelpText: () => "help text",
+      isCommandSupportedForPlatform: () => false,
+      handleCommand: async () => {},
+      runtimeAdapters: {
+        buildTurnInputFromMessage: async () => [],
+        enqueuePrompt: () => {}
+      },
+      safeReply: async (message: { reply: (text: string) => Promise<unknown> }, content: string) => await message.reply(content)
+    });
+
+    await runtime.handleEventPayload({
+      header: {
+        event_id: "evt-where-open-1",
+        event_type: "im.message.receive_v1"
+      },
+      event: {
+        sender: {
+          sender_id: { open_id: "ou_where_open_1" },
+          sender_type: "user"
+        },
+        message: {
+          message_id: "om_where_open_1",
+          chat_id: "oc_where_open_1",
+          chat_type: "group",
+          message_type: "text",
+          content: JSON.stringify({ text: "/where" }),
+          mentions: []
+        }
+      }
+    });
+
+    expect(replies.length).toBe(1);
+    expect(replies[0]).toContain("binding: `unbound-open`");
+    expect(replies[0]).toContain("cwd: `/tmp/open-feishu`");
+    expect(replies[0]).toContain("sandbox mode: `workspace-write`");
+  });
+
   test("routes /status commands through the shared command handler", async () => {
     const calls: Array<{ type: string; payload: unknown }> = [];
     globalThis.fetch = async (input: RequestInfo | URL) => {
@@ -269,6 +346,85 @@ describe("feishu runtime", () => {
     ]);
   });
 
+  test("queues plain text prompts for unbound group chats when open mode is enabled", async () => {
+    const jobs: Array<{ repoChannelId: string; promptText: string }> = [];
+    globalThis.fetch = async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/tenant_access_token/internal")) {
+        return new Response(JSON.stringify({ code: 0, tenant_access_token: "tenant-token", expire: 7200 }), {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        });
+      }
+      return new Response(JSON.stringify({ code: 0, data: { message_id: "om_reply_open_1" } }), {
+        status: 200,
+        headers: { "content-type": "application/json" }
+      });
+    };
+
+    const runtime = createFeishuRuntime({
+      config: {
+        defaultModel: "gpt-5.3-codex",
+        sandboxMode: "workspace-write",
+        allowedFeishuUserIds: []
+      },
+      runtimeEnv: {
+        feishuEnabled: true,
+        feishuAppId: "cli_test",
+        feishuAppSecret: "secret",
+        feishuVerificationToken: "",
+        feishuPort: 8788,
+        feishuHost: "127.0.0.1",
+        feishuWebhookPath: "/feishu/events",
+        feishuGeneralChatId: "",
+        feishuGeneralCwd: "/tmp/general",
+        feishuRequireMentionInGroup: false,
+        feishuUnboundChatMode: "open",
+        feishuUnboundChatCwd: "/tmp/open-group"
+      },
+      getChannelSetups: () => ({}),
+      runManagedRouteCommand: async () => {},
+      getHelpText: () => "help text",
+      isCommandSupportedForPlatform: () => false,
+      handleCommand: async () => {},
+      runtimeAdapters: {
+        buildTurnInputFromMessage: async (_message: unknown, text: string) => [{ type: "text", text }],
+        enqueuePrompt: (repoChannelId: string, job: { inputItems: Array<{ text: string }> }) => {
+          jobs.push({ repoChannelId, promptText: job.inputItems[0]?.text ?? "" });
+        }
+      },
+      safeReply: async () => null
+    });
+
+    await runtime.handleEventPayload({
+      header: {
+        event_id: "evt-open-group-1",
+        event_type: "im.message.receive_v1"
+      },
+      event: {
+        sender: {
+          sender_id: { open_id: "ou_user_open_1" },
+          sender_type: "user"
+        },
+        message: {
+          message_id: "om_open_group_1",
+          chat_id: "oc_open_group_1",
+          chat_type: "group",
+          message_type: "text",
+          content: JSON.stringify({ text: "请直接开始分析这个目录" }),
+          mentions: []
+        }
+      }
+    });
+
+    expect(jobs).toEqual([
+      {
+        repoChannelId: "feishu:oc_open_group_1",
+        promptText: "请直接开始分析这个目录"
+      }
+    ]);
+  });
+
   test("starts long-connection transport and routes sdk events through the same prompt pipeline", async () => {
     const jobs: Array<{ repoChannelId: string; promptText: string }> = [];
     const routeId = makeFeishuRouteId("oc_repo_long_1");
@@ -345,6 +501,7 @@ describe("feishu runtime", () => {
     expect(runtime.webhookPath).toBe("");
     expect(calls).toHaveLength(2);
     expect(typeof registeredHandles["im.message.receive_v1"]).toBe("function");
+    expect(typeof registeredHandles["im.chat.member.bot.added_v1"]).toBe("function");
 
     await registeredHandles["im.message.receive_v1"]({
       sender: {
@@ -367,6 +524,77 @@ describe("feishu runtime", () => {
         promptText: "帮我看下这个变更"
       }
     ]);
+  });
+
+  test("sends an onboarding message when the bot is added to a Feishu group", async () => {
+    const replies: string[] = [];
+    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/tenant_access_token/internal")) {
+        return new Response(JSON.stringify({ code: 0, tenant_access_token: "tenant-token", expire: 7200 }), {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        });
+      }
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      replies.push(body.content ?? "");
+      return new Response(JSON.stringify({ code: 0, data: { message_id: "om_bot_added_1" } }), {
+        status: 200,
+        headers: { "content-type": "application/json" }
+      });
+    };
+
+    const runtime = createFeishuRuntime({
+      config: {
+        defaultModel: "gpt-5.3-codex",
+        sandboxMode: "workspace-write",
+        allowedFeishuUserIds: []
+      },
+      runtimeEnv: {
+        feishuEnabled: true,
+        feishuAppId: "cli_test",
+        feishuAppSecret: "secret",
+        feishuVerificationToken: "",
+        feishuTransport: "long-connection",
+        feishuPort: 8788,
+        feishuHost: "127.0.0.1",
+        feishuWebhookPath: "/feishu/events",
+        feishuGeneralChatId: "",
+        feishuGeneralCwd: "/tmp/general",
+        feishuRequireMentionInGroup: true,
+        feishuUnboundChatMode: "open",
+        feishuUnboundChatCwd: "/tmp/open-welcome"
+      },
+      getChannelSetups: () => ({}),
+      runManagedRouteCommand: async () => {},
+      getHelpText: () => "help text",
+      isCommandSupportedForPlatform: () => false,
+      handleCommand: async () => {},
+      runtimeAdapters: {
+        buildTurnInputFromMessage: async () => [],
+        enqueuePrompt: () => {}
+      },
+      safeReply: async () => null
+    });
+
+    await runtime.handleEventPayload({
+      header: {
+        event_id: "evt-bot-added-1",
+        event_type: "im.chat.member.bot.added_v1"
+      },
+      event: {
+        chat_id: "oc_bot_added_1",
+        operator_id: {
+          open_id: "ou_inviter_1"
+        }
+      }
+    });
+
+    expect(replies).toHaveLength(1);
+    expect(replies[0]).toContain("Bridge is ready in this Feishu chat.");
+    expect(replies[0]).toContain("default open Feishu workspace");
+    expect(replies[0]).toContain("cwd: `/tmp/open-welcome`");
+    expect(replies[0]).toContain("Use `/ask <prompt>` or `@bot <prompt>` in group chats.");
   });
 
   test("routes /setpath in an unbound chat through the shared setpath handler", async () => {

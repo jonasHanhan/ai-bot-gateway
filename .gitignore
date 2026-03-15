@@ -5,9 +5,6 @@ node_modules/
 .env.*
 !.env.example
 
-# PM2 / ecosystem config (local-specific paths)
-ecosystem.config.cjs
-
 # Local runtime state
 data/
 logs/

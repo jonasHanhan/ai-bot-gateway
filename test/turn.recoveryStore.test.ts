@@ -7,6 +7,7 @@ import { createTurnRecoveryStore } from "../src/turns/recoveryStore.js";
 const tempDirs: string[] = [];
 
 afterEach(async () => {
+  delete process.env.TURN_RECOVERY_NOTIFY;
   for (const dir of tempDirs.splice(0)) {
     await fs.rm(dir, { recursive: true, force: true });
   }
@@ -215,5 +216,60 @@ describe("turn recovery store", () => {
     expect(sendCount).toBe(0);
     expect(Object.keys(store.snapshot().turns).length).toBe(0);
     expect(store.getRequestStatus("req-repeat")?.status).toBe("recovery_resumed");
+  });
+
+  test("does not emit recovery notice when TURN_RECOVERY_NOTIFY=0", async () => {
+    process.env.TURN_RECOVERY_NOTIFY = "0";
+    const { store } = await makeStore();
+    await store.upsertTurnFromTracker({
+      threadId: "thread-silent",
+      repoChannelId: "channel-silent",
+      requestId: "req-silent",
+      channel: { id: "channel-silent" },
+      statusMessageId: "status-silent",
+      cwd: "/tmp/repo",
+      lifecyclePhase: "running",
+      seenDelta: false,
+      fullText: ""
+    });
+
+    let sendCount = 0;
+    let editCount = 0;
+    const channel = {
+      isTextBased: () => true,
+      messages: {
+        async fetch(messageId: string) {
+          return {
+            id: messageId,
+            async edit() {
+              editCount += 1;
+              return this;
+            }
+          };
+        }
+      }
+    };
+
+    const summary = await store.reconcilePending({
+      fetchChannelByRouteId: async () => channel,
+      codex: {
+        async request(method: string) {
+          if (method === "thread/list") {
+            return { data: [{ id: "thread-silent" }], nextCursor: null };
+          }
+          return { data: [], nextCursor: null };
+        }
+      },
+      safeSendToChannel: async () => {
+        sendCount += 1;
+        return null;
+      }
+    });
+
+    expect(summary.reconciled).toBe(1);
+    expect(editCount).toBe(0);
+    expect(sendCount).toBe(0);
+    expect(Object.keys(store.snapshot().turns).length).toBe(0);
+    expect(store.getRequestStatus("req-silent")?.status).toBe("recovery_resumed");
   });
 });

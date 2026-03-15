@@ -4,6 +4,8 @@ export function stripAnsi(text) {
   if (typeof text !== "string" || text.length === 0) {
     return "";
   }
-  return text.replace(ANSI_PATTERN, "");
+  return text
+    .replace(/\\u001b/gi, "\u001B")
+    .replace(/\\u009b/gi, "\u009B")
+    .replace(ANSI_PATTERN, "");
 }
-

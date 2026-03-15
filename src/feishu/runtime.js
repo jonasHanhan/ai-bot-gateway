@@ -102,13 +102,14 @@ export function createFeishuRuntime(deps) {
 
   async function processEventPayload(payload) {
     const eventType = String(payload?.header?.event_type ?? "");
-    if (eventType !== "im.message.receive_v1") {
+    const eventId = String(payload?.header?.event_id ?? payload?.event_id ?? "").trim();
+    if (eventType === "im.message.receive_v1") {
+      await processMessageReceiveEvent(payload?.event, { eventId });
       return;
     }
-
-    await processMessageReceiveEvent(payload?.event, {
-      eventId: String(payload?.header?.event_id ?? "")
-    });
+    if (eventType === "im.chat.member.bot.added_v1") {
+      await processBotAddedEvent(payload?.event, { eventId });
+    }
   }
 
   async function processMessageReceiveEvent(event, options = {}) {
@@ -166,7 +167,18 @@ export function createFeishuRuntime(deps) {
 
     if (normalizedCommand === "!where") {
       const context = resolveFeishuContext(inboundMessage, buildFeishuContextOptions());
-      await safeReply(inboundMessage, buildFeishuWhereText({ inboundMessage, senderOpenId, context }));
+      await safeReply(
+        inboundMessage,
+        buildFeishuWhereText({
+          inboundMessage,
+          senderOpenId,
+          context,
+          bindingKind: getFeishuBindingKind({
+            routeId: inboundMessage.channelId,
+            context
+          })
+        })
+      );
       return;
     }
 
@@ -238,6 +250,38 @@ export function createFeishuRuntime(deps) {
         messageId: inboundMessage.id
       })
     });
+  }
+
+  async function processBotAddedEvent(event, options = {}) {
+    const eventId =
+      String(options?.eventId ?? "").trim() ||
+      buildLongConnectionChatEventId("bot-added", event?.chat_id, event?.operator_id?.open_id);
+    if (eventId && markEventSeen(eventId)) {
+      return;
+    }
+
+    const chatId = String(event?.chat_id ?? "").trim();
+    if (!chatId) {
+      return;
+    }
+
+    const routeId = makeFeishuRouteId(chatId);
+    const context = resolveFeishuContext(
+      {
+        channelId: routeId
+      },
+      buildFeishuContextOptions()
+    );
+    const channel = createChannel(chatId);
+    const operatorOpenId = String(event?.operator_id?.open_id ?? "").trim();
+    const welcomeText = buildFeishuBotAddedText({
+      chatId,
+      operatorOpenId,
+      context,
+      bindingKind: getFeishuBindingKind({ routeId, context }),
+      requireMentionInGroup: feishuRequireMentionInGroup
+    });
+    await channel.send(welcomeText);
   }
 
   async function handleInboundImageMessage({ inboundMessage, senderOpenId, message }) {
@@ -329,7 +373,14 @@ export function createFeishuRuntime(deps) {
       loggerLevel: feishuSdk.LoggerLevel?.warn
     }).register({
       "im.message.receive_v1": async (event) => {
-        await processMessageReceiveEvent(event);
+        await processMessageReceiveEvent(event, {
+          eventId: String(event?.event_id ?? "")
+        });
+      },
+      "im.chat.member.bot.added_v1": async (event) => {
+        await processBotAddedEvent(event, {
+          eventId: String(event?.event_id ?? "")
+        });
       }
     });
 
@@ -775,6 +826,16 @@ export function createFeishuRuntime(deps) {
     return resolveFeishuContext(inboundMessage, buildFeishuContextOptions());
   }
 
+  function getFeishuBindingKind({ routeId, context }) {
+    if (!context) {
+      return "none";
+    }
+    if (context.setup.mode === "general") {
+      return "general";
+    }
+    return getChannelSetups()[routeId] ? "repo" : "unbound-open";
+  }
+
   function buildFeishuContextOptions() {
     return {
       channelSetups: getChannelSetups(),
@@ -956,6 +1017,15 @@ function buildLongConnectionEventId(event) {
   return "";
 }
 
+function buildLongConnectionChatEventId(prefix, chatId, operatorOpenId = "") {
+  const normalizedChatId = String(chatId ?? "").trim();
+  if (!normalizedChatId) {
+    return "";
+  }
+  const normalizedOperator = String(operatorOpenId ?? "").trim();
+  return `${prefix}:${normalizedChatId}:${normalizedOperator || "unknown"}`;
+}
+
 function getProxyUrl() {
   return (
     String(process.env.HTTPS_PROXY ?? "").trim() ||
@@ -1108,7 +1178,7 @@ function guessFeishuFileType(fileName = "") {
   return "stream";
 }
 
-function buildFeishuWhereText({ inboundMessage, senderOpenId, context }) {
+function buildFeishuWhereText({ inboundMessage, senderOpenId, context, bindingKind = "none" }) {
   const routeId = String(inboundMessage?.channelId ?? "").trim();
   const chatId = String(inboundMessage?.channel?.chatId ?? "").trim();
   const lines = [
@@ -1124,12 +1194,43 @@ function buildFeishuWhereText({ inboundMessage, senderOpenId, context }) {
     return lines.join("\n");
   }
 
-  const threadMode = context.setup.mode === "general" ? "general" : "repo";
+  const threadMode = bindingKind === "unbound-open" ? "unbound-open" : context.setup.mode === "general" ? "general" : "repo";
   const fileWrites = context.setup.allowFileWrites === false ? "disabled" : "enabled";
   lines.push(`binding: \`${threadMode}\``);
   lines.push(`cwd: \`${context.setup.cwd}\``);
   lines.push(`model: \`${context.setup.model}\``);
   lines.push(`sandbox mode: \`${context.setup.sandboxMode}\``);
   lines.push(`file writes: \`${fileWrites}\``);
+  return lines.join("\n");
+}
+
+function buildFeishuBotAddedText({ chatId, operatorOpenId, context, bindingKind, requireMentionInGroup }) {
+  const lines = ["Bridge is ready in this Feishu chat."];
+
+  if (!context) {
+    lines.push(`chat_id: \`${chatId || "(unknown)"}\``);
+    lines.push(`route_id: \`${makeFeishuRouteId(chatId)}\``);
+    if (operatorOpenId) {
+      lines.push(`invited_by_open_id: \`${operatorOpenId}\``);
+    }
+    lines.push("This chat is not bound yet. Send `/where` to inspect identifiers or `/setpath /absolute/path` to bind it.");
+    return lines.join("\n");
+  }
+
+  if (bindingKind === "general") {
+    lines.push("This chat is using the read-only Feishu general workspace.");
+  } else if (bindingKind === "unbound-open") {
+    lines.push("This new chat is usable immediately with the default open Feishu workspace.");
+  } else {
+    lines.push("This chat is already bound to a repo workspace.");
+  }
+
+  lines.push(`cwd: \`${context.setup.cwd}\``);
+  lines.push("Try `/where` to inspect identifiers or `/setpath /absolute/path` to switch workspaces.");
+  lines.push(
+    requireMentionInGroup
+      ? "Use `/ask <prompt>` or `@bot <prompt>` in group chats."
+      : "Use `/ask <prompt>` or send a plain prompt directly in this chat."
+  );
   return lines.join("\n");
 }

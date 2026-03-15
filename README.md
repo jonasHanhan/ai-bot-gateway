@@ -160,7 +160,8 @@ sequenceDiagram
 - `codex` CLI installed on the host and already authenticated
 - At least one chat platform configured:
   - Discord bot token with `MESSAGE CONTENT INTENT` enabled
-  - or Feishu app credentials with `im.message.receive_v1` event subscription enabled for either webhook or long-connection mode
+  - or Feishu app credentials with `im.message.receive_v1` enabled for either webhook or long-connection mode
+    - optionally subscribe `im.chat.member.bot.added_v1` if you want a welcome/onboarding message when the bot is added to a new group
 
 ### Install
 
@@ -197,12 +198,13 @@ Optional hardening and routing overrides:
 ```bash
 # FEISHU_VERIFICATION_TOKEN=replace-me
 # FEISHU_ALLOWED_OPEN_IDS=ou_xxx
+# FEISHU_UNBOUND_CHAT_CWD=/Users/you/projects/default-repo
 # BACKEND_HTTP_HOST=0.0.0.0
 # BACKEND_HTTP_PORT=8788
 # FEISHU_WEBHOOK_PATH=/feishu/events
 ```
 
-Feishu repo chats do not auto-discover. Add `feishu:<chat_id>` mappings to `config/channels.json`.
+Feishu repo chats do not auto-discover. New chats are usable by default through the open unbound workspace, which falls back to `FEISHU_UNBOUND_CHAT_CWD` and defaults to the bridge working directory. Add `feishu:<chat_id>` mappings to `config/channels.json` when you want a stable per-chat repo binding.
 
 Transport notes:
 
@@ -248,14 +250,15 @@ curl -i http://127.0.0.1:8788/readyz
 
 ### Feishu
 
-- Only mapped chats or the configured Feishu general chat are accepted.
-- Plain text in a mapped repo chat is treated as a prompt.
+- New chats are accepted by default through the open unbound workspace unless you explicitly set `FEISHU_UNBOUND_CHAT_MODE=strict`.
+- Plain text in a mapped repo chat or an open unbound chat is treated as a prompt.
 - Commands use leading slash text such as `/status`, `/ask`, `/approve`.
 - `/setpath /absolute/path` rebinds the current chat to an existing repo path and clears the old Codex thread binding.
 - In group chats, plain prompts require `@bot` when `FEISHU_REQUIRE_MENTION_IN_GROUP=1`.
-- Feishu plain text and image messages in mapped chats are bridged into Codex turns.
+- Feishu plain text and image messages in mapped chats and open unbound chats are bridged into Codex turns.
 - `!initrepo` is not supported on Feishu. Chat bindings stay config-driven.
-- `/where` works even before a chat is bound and returns `chat_id`, `route_id`, and `sender_open_id` for setup.
+- `/where` works even before a chat is explicitly bound and returns `chat_id`, `route_id`, `sender_open_id`, and the effective workspace mode.
+- If `im.chat.member.bot.added_v1` is subscribed, the bot posts an onboarding message when it is added to a new group.
 - `FEISHU_TRANSPORT=long-connection` skips callback URLs and receives events over WebSocket instead.
 
 ## Command Reference
@@ -317,6 +320,8 @@ Use `.env.example` as the exhaustive reference. The most important variables are
 | `FEISHU_ALLOWED_OPEN_IDS` | Optional comma-separated Feishu allowlist |
 | `FEISHU_GENERAL_CHAT_ID` | Optional read-only Feishu general chat |
 | `FEISHU_REQUIRE_MENTION_IN_GROUP` | Require mention for plain prompts in group chats |
+| `FEISHU_UNBOUND_CHAT_MODE` | Feishu fallback for unmapped chats; defaults to `open` |
+| `FEISHU_UNBOUND_CHAT_CWD` | Workspace used by open unmapped Feishu chats; defaults to the bridge cwd |
 | `BACKEND_HTTP_ENABLED` | Forces backend HTTP server on; enabled automatically when Feishu is configured |
 | `BACKEND_HTTP_HOST` | Optional backend bind address, default `0.0.0.0` |
 | `BACKEND_HTTP_PORT` | Optional backend bind port, default `8788` |
@@ -561,179 +566,12 @@ This is the shortest reliable way to bring Feishu online with the current bridge
 
 ## Service and Deployment
 
-### PM2
-
-PM2 is a production process manager for Node.js applications with built-in load balancing, keeping applications alive forever, and reloading them without downtime.
-
-#### Setup
-
-1. Install PM2 globally:
-
-```bash
-npm install -g pm2
-```
-
-2. Copy the PM2 config template:
-
-```bash
-cp ecosystem.config.example.cjs ecosystem.config.cjs
-```
-
-3. Edit `ecosystem.config.cjs` with your local settings:
-
-```javascript
-module.exports = {
-  apps: [{
-    name: 'codex-discord-bridge',
-    script: 'scripts/start-with-proxy.mjs',
-    interpreter: '/Users/yourname/.nvm/versions/node/v22.22.0/bin/node',  // Your Node.js path
-    cwd: '/Users/yourname/.openclaw/ai-bot-gateway',  // Your project path
-    instances: 1,
-    autorestart: true,
-    watch: false,
-    max_memory_restart: '1G',
-    env: {
-      NODE_ENV: 'production',
-      FEISHU_UNBOUND_CHAT_MODE: 'open',  // Optional: allow all unbound Feishu chats
-      FEISHU_UNBOUND_CHAT_CWD: '/Users/yourname/.openclaw/workspace',  // Optional: default workspace for unbound chats
-      // Add other environment variables here or use .env file
-    },
-    error_file: '/tmp/codex-discord-bridge.pm2.err.log',
-    out_file: '/tmp/codex-discord-bridge.pm2.out.log',
-    log_file: '/tmp/codex-discord-bridge.pm2.log',
-    time: true,
-    merge_logs: true,
-    min_uptime: '10s',
-    max_restarts: 10,
-    restart_delay: 4000,
-    kill_timeout: 5000,
-    wait_ready: true,
-    listen_timeout: 10000,
-    shutdown_with_message: true
-  }]
-};
-```
-
-**Important**: The `ecosystem.config.cjs` file contains local-specific paths and should **not** be committed to Git. It's already in `.gitignore`.
-
-#### Environment Variables in PM2
-
-You can configure environment variables in two ways:
-
-1. **Directly in `ecosystem.config.cjs`** (recommended for production):
-   - Edit the `env` object in the config file
-   - PM2 passes these variables directly to the process
-   - This is more reliable than using `.env` with PM2
-
-2. **Using `.env` file** (development):
-   - Configure in `.env` file
-   - `scripts/start-with-proxy.mjs` loads `.env` via `dotenv/config`
-   - Note: PM2 may not always load `.env` correctly; direct configuration is safer
-
-**Key Environment Variables**:
-
-```bash
-# Discord
-DISCORD_BOT_TOKEN=your_bot_token
-DISCORD_GUILD_ID=your_guild_id
-DISCORD_ALLOWED_USER_IDS=user_id1,user_id2
-DISCORD_REPO_ROOT=/path/to/projects
-
-# Feishu (optional)
-FEISHU_APP_ID=cli_xxx
-FEISHU_APP_SECRET=your_app_secret
-FEISHU_TRANSPORT=long-connection  # or webhook
-FEISHU_UNBOUND_CHAT_MODE=open  # open or strict
-
-# Backend
-BACKEND_HTTP_ENABLED=1
-BACKEND_HTTP_HOST=127.0.0.1
-BACKEND_HTTP_PORT=8788
-
-# Codex
-CODEX_BIN=codex
-CODEX_APPROVAL_POLICY=on-request
-CODEX_SANDBOX_MODE=workspace-write
-```
-
-#### PM2 Commands
-
-```bash
-# Start the service
-pm2 start ecosystem.config.cjs
-
-# Status and logs
-pm2 list                    # List all processes
-pm2 status                  # Show detailed status
-pm2 logs codex-discord-bridge              # View logs in real-time
-pm2 logs codex-discord-bridge --lines 100  # View last 100 lines
-
-# Control
-pm2 stop codex-discord-bridge               # Stop the service
-pm2 restart codex-discord-bridge            # Restart the service
-pm2 delete codex-discord-bridge             # Stop and remove from process list
-
-# Monitor
-pm2 monit                   # Real-time monitoring dashboard
-pm2 info codex-discord-bridge               # Detailed process information
-pm2 env 0                    # Show environment variables for process 0
-
-# Logs management
-pm2 flush                   # Flush all logs
-pm2 logs --json             # View logs in JSON format
-```
-
-#### Operational Scripts
-
-The `scripts/` directory includes several helper scripts for PM2 management:
-
-```bash
-# Quick operations
-./scripts/pm2-commands.sh status        # Show PM2 status
-./scripts/pm2-commands.sh restart       # Restart PM2 service
-./scripts/pm2-commands.sh logs          # View PM2 logs
-./scripts/quick-restart.sh              # Quick restart with port cleanup
-
-# Monitoring
-./scripts/dashboard.sh                  # Real-time monitoring dashboard
-./scripts/service-monitor.sh            # Service health monitoring
-./scripts/health-check.sh               # HTTP health check
-./scripts/performance-monitor.sh        # Performance metrics
-
-# Logs analysis
-./scripts/log-analyzer.sh               # Analyze startup and errors
-./scripts/log-viewer.sh                 # Multi-dimensional log viewer
-./scripts/log-collector.sh              # Collect and archive logs
-```
-
-#### Startup on Boot
-
-To automatically start PM2 on system boot:
-
-```bash
-# Save the current process list
-pm2 save
-
-# Generate and enable the startup script
-pm2 startup
-
-# Follow the command output to enable PM2 startup
-# For macOS: sudo env PATH=$PATH:/Users/you/.nvm/versions/node/v20.XX/bin pm2 startup launchd -u yourname --hp /Users/you
-# For Linux: sudo env PATH=$PATH:/usr/bin pm2 startup systemd -u yourname --hp /home/you
-```
-
-#### Troubleshooting
-
-- **Environment variables not loading?** Add them directly to `ecosystem.config.cjs` under the `env` section
-- **Port still busy after restart?** Use `./scripts/quick-restart.sh` for proper port cleanup
-- **Service crashing repeatedly?** Check `pm2 logs` and `pm2 info` for error details and restart count
-- **High memory usage?** `max_memory_restart: '1G'` will auto-restart when memory exceeds 1GB
-
 ### Foreground and Supervisor
 
 - `bun run start` starts the bridge directly
 - `bun run start:backend` starts the proxy-aware wrapper
 - `scripts/restart-supervisor.sh -- node scripts/start-with-proxy.mjs` runs an external supervisor that watches `data/restart-request.json`, waits for active turns to drain, writes `data/restart-ack.json`, and restarts the bridge
+- `./scripts/health-check.sh` runs a simple HTTP health probe against `http://127.0.0.1:8788/`
 
 ### macOS `launchd`
 
@@ -894,5 +732,6 @@ src/render/messageRenderer.js        Summary/status rendering
 src/cli/**                           Operator CLI
 deploy/systemd/**                    Linux service artifacts
 scripts/restart-supervisor.sh        Host-managed restart supervisor
+scripts/health-check.sh              Simple local HTTP health check
 scripts/start-with-proxy.mjs         Proxy-aware service entry wrapper
 ```

@@ -33,6 +33,7 @@ export function buildBridgeRuntimes(deps) {
     statePath,
     configPath,
     renderVerbosity,
+    disableStreamingOutput,
     backendHttpEnabled,
     backendHttpHost,
     backendHttpPort,
@@ -107,6 +108,7 @@ export function buildBridgeRuntimes(deps) {
   const notificationRuntime = buildNotificationRuntime({
     activeTurns,
     renderVerbosity,
+    disableStreamingOutput,
     runtimeAdapters,
     safeSendToChannel,
     debugLog,

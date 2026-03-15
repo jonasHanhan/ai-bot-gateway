@@ -19,6 +19,7 @@ export function createNotificationRuntime(deps) {
     safeSendToChannel,
     truncateForDiscordMessage,
     discordMaxMessageLength,
+    disableStreamingOutput = false,
     feishuStreamMinChars = 80,
     debugLog,
     writeHeartbeatFile,
@@ -678,6 +679,9 @@ export function createNotificationRuntime(deps) {
   }
 
   function canStreamTrackerOutput(tracker) {
+    if (disableStreamingOutput) {
+      return false;
+    }
     if (!tracker?.channel) {
       return false;
     }

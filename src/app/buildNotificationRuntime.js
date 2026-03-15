@@ -7,7 +7,15 @@ import { buildFileDiffSection, recordFileChanges, truncateStatusText } from "../
 import { normalizeFinalSummaryText } from "../turns/textNormalization.js";
 
 export function buildNotificationRuntime(deps) {
-  const { activeTurns, runtimeAdapters, safeSendToChannel, debugLog, turnRecoveryStore, sendChunkedToChannel } = deps;
+  const {
+    activeTurns,
+    runtimeAdapters,
+    safeSendToChannel,
+    debugLog,
+    turnRecoveryStore,
+    sendChunkedToChannel,
+    disableStreamingOutput = false
+  } = deps;
 
   return createNotificationRuntime({
     activeTurns,
@@ -26,6 +34,7 @@ export function buildNotificationRuntime(deps) {
     safeSendToChannel,
     truncateForDiscordMessage,
     discordMaxMessageLength: 1900,
+    disableStreamingOutput,
     debugLog,
     writeHeartbeatFile: runtimeAdapters.writeHeartbeatFile,
     onTurnFinalized: async (tracker) => {

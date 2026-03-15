@@ -14,7 +14,7 @@ function normalizeFeishuUnboundChatMode(rawMode) {
   if (["open", "1", "true", "all"].includes(normalized)) {
     return "open";
   }
-  return "strict";
+  return "open";
 }
 
 export function loadRuntimeEnv() {
@@ -67,6 +67,7 @@ export function loadRuntimeEnv() {
       ? Math.floor(configuredHeartbeatIntervalMs)
       : 30_000;
   const debugLoggingEnabled = process.env.DISCORD_DEBUG_LOGGING === "1";
+  const disableStreamingOutput = process.env.DISABLE_STREAMING_OUTPUT === "1";
   const projectsCategoryName =
     process.env.DISCORD_PROJECTS_CATEGORY_NAME ??
     process.env.DISCORD_LEGACY_CATEGORY_NAME ??
@@ -124,6 +125,7 @@ export function loadRuntimeEnv() {
     exitOnRestartAck,
     heartbeatIntervalMs,
     debugLoggingEnabled,
+    disableStreamingOutput,
     projectsCategoryName,
     extraWritableRoots,
     backendHttpEnabled,
