@@ -228,4 +228,44 @@ describe("attachments integration smoke", () => {
     expect(sentPayloads.length).toBe(1);
     expect(String(sentPayloads[0]?.content ?? "")).toContain("home-brand-theme-fresh-4.png");
   });
+
+  test("summary inferred attachments send markdown-linked text file", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-bridge-attach-text-"));
+    tempDirs.push(tmpDir);
+    const realTmpDir = await fs.realpath(tmpDir);
+    const notePath = path.join(realTmpDir, "attachment-test.txt");
+    await fs.writeFile(notePath, "hello attachment");
+
+    const sentPayloads: Array<Record<string, unknown>> = [];
+    const tracker = {
+      channel: { id: "channel-6" },
+      cwd: realTmpDir,
+      sentAttachmentKeys: new Set<string>(),
+      seenAttachmentIssueKeys: new Set<string>(),
+      attachmentIssueCount: 0
+    };
+
+    const sentCount = await maybeSendInferredAttachmentsFromText(
+      tracker,
+      `Please send this file: [attachment-test.txt](${notePath})`,
+      {
+        attachmentsEnabled: true,
+        attachmentMaxBytes: 8 * 1024 * 1024,
+        attachmentRoots: [realTmpDir],
+        imageCacheDir: realTmpDir,
+        statusLabelForItemType: () => "image view",
+        safeSendToChannel: async () => null,
+        safeSendToChannelPayload: async (_channel: unknown, payload: Record<string, unknown>) => {
+          sentPayloads.push(payload);
+          return null;
+        },
+        truncateStatusText: (text: string) => text
+      }
+    );
+
+    expect(sentCount).toBe(1);
+    expect(sentPayloads.length).toBe(1);
+    expect(String(sentPayloads[0]?.content ?? "")).toContain("attachment-test.txt");
+    expect(Array.isArray(sentPayloads[0]?.files)).toBe(true);
+  });
 });

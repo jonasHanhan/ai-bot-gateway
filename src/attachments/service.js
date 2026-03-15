@@ -2,6 +2,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 
+const SUPPORTED_ATTACHMENT_EXT_PATTERN =
+  "(?:png|jpe?g|webp|gif|bmp|tiff?|svg|mp4|mov|m4v|webm|mkv|avi|mp3|m4a|wav|flac|aac|ogg|txt|md|json|csv|log|pdf|zip|tar|gz|tgz|bz2|7z|docx?|xlsx?|pptx?)";
+
 export async function maybeSendAttachmentsForItem(tracker, item, context) {
   const {
     attachmentsEnabled,
@@ -270,10 +273,17 @@ export function collectLikelyLocalPathsFromText(text) {
     return [];
   }
   const found = new Set();
-  const mediaExtPattern = "(?:png|jpe?g|webp|gif|bmp|tiff?|svg|mp4|mov|m4v|webm|mkv|avi|mp3|m4a|wav|flac|aac|ogg)";
   const mediaPathPattern =
     new RegExp(
-      String.raw`(?:^|[\s([` + "`'\"" + String.raw`])((?:\/|~\/)[^\s)\]` + "`'\"<>" + String.raw`\r\n]+\.` + mediaExtPattern + String.raw`)(?:$|[\s)\]` + "`'\"" + String.raw`,.!?:;])`,
+      String.raw`(?:^|[\s([` +
+        "`'\"" +
+        String.raw`])((?:\/|~\/)[^\s)\]` +
+        "`'\"<>" +
+        String.raw`\r\n]+\.` +
+        SUPPORTED_ATTACHMENT_EXT_PATTERN +
+        String.raw`)(?:$|[\s)\]` +
+        "`'\"" +
+        String.raw`,.!?:;])`,
       "gi"
     );
   let match = mediaPathPattern.exec(text);
@@ -288,7 +298,7 @@ export function collectLikelyLocalPathsFromText(text) {
   const relativeMediaPathPattern =
     new RegExp(
       String.raw`(?:^|[\s([` + "`'\"" + String.raw`])((?:(?:\.\.?\/)?[A-Za-z0-9._-]+\/)+[A-Za-z0-9._-]+\.` +
-        mediaExtPattern +
+        SUPPORTED_ATTACHMENT_EXT_PATTERN +
         String.raw`)(?:$|[\s)\]` + "`'\"" + String.raw`,.!?:;])`,
       "gi"
     );
@@ -305,7 +315,7 @@ export function collectLikelyLocalPathsFromText(text) {
   match = markdownLinkPathPattern.exec(text);
   while (match) {
     const raw = String(match[1] ?? "").trim();
-    if (!/^https?:\/\//i.test(raw) && new RegExp(`\\.${mediaExtPattern}$`, "i").test(raw)) {
+    if (!/^https?:\/\//i.test(raw) && new RegExp(`\\.${SUPPORTED_ATTACHMENT_EXT_PATTERN}$`, "i").test(raw)) {
       found.add(raw);
     }
     match = markdownLinkPathPattern.exec(text);
@@ -313,7 +323,13 @@ export function collectLikelyLocalPathsFromText(text) {
 
   const bareMediaFilenamePattern =
     new RegExp(
-      String.raw`(?:^|[\s([` + "`'\"" + String.raw`])([A-Za-z0-9._-]+\.` + mediaExtPattern + String.raw`)(?:$|[\s)\]` + "`'\"" + String.raw`,.!?:;])`,
+      String.raw`(?:^|[\s([` +
+        "`'\"" +
+        String.raw`])([A-Za-z0-9._-]+\.` +
+        SUPPORTED_ATTACHMENT_EXT_PATTERN +
+        String.raw`)(?:$|[\s)\]` +
+        "`'\"" +
+        String.raw`,.!?:;])`,
       "gi"
     );
   match = bareMediaFilenamePattern.exec(text);
@@ -613,9 +629,7 @@ function isSupportedMediaPath(value) {
     return false;
   }
   const normalized = value.trim().toLowerCase();
-  return /\.(png|jpe?g|webp|gif|bmp|tiff?|svg|mp4|mov|m4v|webm|mkv|avi|mp3|m4a|wav|flac|aac|ogg)$/.test(
-    normalized
-  );
+  return new RegExp(`\\.${SUPPORTED_ATTACHMENT_EXT_PATTERN}$`, "i").test(normalized);
 }
 
 function resolveAttachmentRoots(tracker, attachmentRoots, imageCacheDir) {
