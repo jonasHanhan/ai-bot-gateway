@@ -16,7 +16,9 @@ export function buildNotificationRuntime(deps) {
     sendChunkedToChannel,
     discordMaxMessageLength = 1900,
     feishuMaxMessageLength = 8000,
-    disableStreamingOutput = false
+    disableStreamingOutput = false,
+    feishuSegmentedStreaming = true,
+    feishuStreamMinChars = 80
   } = deps;
 
   return createNotificationRuntime({
@@ -38,6 +40,8 @@ export function buildNotificationRuntime(deps) {
     discordMaxMessageLength,
     feishuMaxMessageLength,
     disableStreamingOutput,
+    feishuSegmentedStreaming,
+    feishuStreamMinChars,
     debugLog,
     writeHeartbeatFile: runtimeAdapters.writeHeartbeatFile,
     onTurnFinalized: async (tracker) => {

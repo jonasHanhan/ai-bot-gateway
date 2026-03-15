@@ -57,6 +57,8 @@ export function attachBuiltRuntimes(params) {
     feishuUnboundChatMode,
     feishuUnboundChatCwd,
     feishuRequireMentionInGroup,
+    feishuSegmentedStreaming,
+    feishuStreamMinChars,
     generalChannelId,
     generalChannelName,
     generalChannelCwd
@@ -115,6 +117,8 @@ export function attachBuiltRuntimes(params) {
     feishuUnboundChatMode,
     feishuUnboundChatCwd,
     feishuRequireMentionInGroup,
+    feishuSegmentedStreaming,
+    feishuStreamMinChars,
     generalChannelId,
     generalChannelName,
     generalChannelCwd,

@@ -561,6 +561,8 @@ This is the shortest reliable way to bring Feishu online with the current bridge
 - `FEISHU_GENERAL_CHAT_ID` creates one read-only general chat, similar to Discord `#general`.
 - If `FEISHU_REQUIRE_MENTION_IN_GROUP=1`, plain prompts in group chats need an `@mention`; slash-style commands such as `/status` still work.
 - Feishu now supports inbound image messages, segmented streaming text output, plus outbound image and file uploads. Unsupported outbound attachment types still fall back to text notices.
+- Set `FEISHU_SEGMENTED_STREAMING=0` to disable segmented streaming replies and send only final responses.
+- Optional `FEISHU_STREAM_MIN_CHARS` controls flush threshold for segmented streaming (default `80`).
 - In long-connection mode, Feishu delivers events to one connected client instance for the app instead of broadcasting to every instance.
 - `POST /feishu/events` only needs to stay reachable in webhook mode.
 

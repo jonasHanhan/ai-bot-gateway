@@ -21,6 +21,7 @@ export function createNotificationRuntime(deps) {
     discordMaxMessageLength = 1900,
     feishuMaxMessageLength = 8000,
     disableStreamingOutput = false,
+    feishuSegmentedStreaming = true,
     feishuStreamMinChars = 80,
     debugLog,
     writeHeartbeatFile,
@@ -697,7 +698,7 @@ export function createNotificationRuntime(deps) {
   }
 
   function canSegmentStreamTrackerOutput(tracker) {
-    return canStreamTrackerOutput(tracker) && isFeishuTracker(tracker);
+    return canStreamTrackerOutput(tracker) && feishuSegmentedStreaming && isFeishuTracker(tracker);
   }
 
   function isFeishuTracker(tracker) {

@@ -34,6 +34,8 @@ const ENV_KEYS = [
   "DISCORD_LEGACY_CATEGORY_NAME",
   "CODEX_EXTRA_WRITABLE_ROOTS",
   "FEISHU_MESSAGE_CHUNK_LIMIT",
+  "FEISHU_SEGMENTED_STREAMING",
+  "FEISHU_STREAM_MIN_CHARS",
   "FEISHU_UNBOUND_CHAT_MODE",
   "FEISHU_UNBOUND_CHAT_CWD"
 ] as const;
@@ -130,5 +132,15 @@ describe("runtime env", () => {
 
     expect(env.feishuUnboundChatMode).toBe("open");
     expect(env.feishuUnboundChatCwd).toBe("/tmp/feishu-open");
+  });
+
+  test("supports disabling Feishu segmented streaming", () => {
+    process.env.FEISHU_SEGMENTED_STREAMING = "0";
+    process.env.FEISHU_STREAM_MIN_CHARS = "120";
+
+    const env = loadRuntimeEnv();
+
+    expect(env.feishuSegmentedStreaming).toBe(false);
+    expect(env.feishuStreamMinChars).toBe(120);
   });
 });

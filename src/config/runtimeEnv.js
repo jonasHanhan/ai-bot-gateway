@@ -104,6 +104,12 @@ export function loadRuntimeEnv() {
   const feishuGeneralCwd = path.resolve(process.env.FEISHU_GENERAL_CWD ?? feishuGeneralDefaultCwd);
   const feishuGeneralRouteId = feishuGeneralChatId ? makeFeishuRouteId(feishuGeneralChatId) : "";
   const feishuRequireMentionInGroup = process.env.FEISHU_REQUIRE_MENTION_IN_GROUP !== "0";
+  const feishuSegmentedStreaming = process.env.FEISHU_SEGMENTED_STREAMING !== "0";
+  const configuredFeishuStreamMinChars = Number(process.env.FEISHU_STREAM_MIN_CHARS ?? "");
+  const feishuStreamMinChars =
+    Number.isFinite(configuredFeishuStreamMinChars) && configuredFeishuStreamMinChars > 0
+      ? Math.floor(configuredFeishuStreamMinChars)
+      : 80;
   const feishuUnboundChatMode = normalizeFeishuUnboundChatMode(process.env.FEISHU_UNBOUND_CHAT_MODE);
   const feishuUnboundChatCwd = path.resolve(process.env.FEISHU_UNBOUND_CHAT_CWD ?? process.cwd());
 
@@ -157,6 +163,8 @@ export function loadRuntimeEnv() {
     feishuGeneralRouteId,
     feishuGeneralCwd,
     feishuRequireMentionInGroup,
+    feishuSegmentedStreaming,
+    feishuStreamMinChars,
     feishuUnboundChatMode,
     feishuUnboundChatCwd
   };
