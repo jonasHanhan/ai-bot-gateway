@@ -1,3 +1,5 @@
+import { normalizeRecognizedCommandText } from "../commands/commandText.js";
+
 export function createDiscordRuntime(deps) {
   const {
     ChannelType,
@@ -54,13 +56,14 @@ export function createDiscordRuntime(deps) {
     if (!content && imageAttachments.length === 0) {
       return;
     }
+    const normalizedCommand = normalizeRecognizedCommandText(content, DISCORD_MESSAGE_COMMANDS);
 
-    if (content.toLowerCase() === "!resync") {
+    if (normalizedCommand.toLowerCase() === "!resync") {
       await runManagedRouteCommand(message, { forceRebuild: false });
       return;
     }
 
-    if (content.toLowerCase() === "!rebuild") {
+    if (normalizedCommand.toLowerCase() === "!rebuild") {
       await runManagedRouteCommand(message, { forceRebuild: true });
       return;
     }
@@ -74,8 +77,8 @@ export function createDiscordRuntime(deps) {
         cwd: generalChannelCwd
       }
     });
-    if (content.startsWith("!")) {
-      const [commandRaw, ...restParts] = content.split(/\s+/);
+    if (normalizedCommand) {
+      const [commandRaw, ...restParts] = normalizedCommand.split(/\s+/);
       const command = commandRaw.toLowerCase();
       const rest = restParts.join(" ").trim();
 
@@ -117,8 +120,8 @@ export function createDiscordRuntime(deps) {
       return;
     }
 
-    if (content.startsWith("!")) {
-      await handleCommand(message, content, context);
+    if (normalizedCommand) {
+      await handleCommand(message, normalizedCommand, context);
       return;
     }
 
@@ -317,6 +320,31 @@ export function createDiscordRuntime(deps) {
     };
   }
 }
+
+const DISCORD_MESSAGE_COMMANDS = new Set([
+  "help",
+  "ask",
+  "setpath",
+  "status",
+  "new",
+  "restart",
+  "interrupt",
+  "where",
+  "approve",
+  "decline",
+  "cancel",
+  "resync",
+  "rebuild",
+  "initrepo",
+  "mkchannel",
+  "mkrepo",
+  "mkbind",
+  "bind",
+  "rebind",
+  "unbind",
+  "setmodel",
+  "clearmodel"
+]);
 
 function normalizeIncomingContent(content, botUserId) {
   if (!content) {

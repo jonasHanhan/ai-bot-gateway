@@ -7,6 +7,7 @@ import { resolveFeishuContext } from "./context.js";
 import { isFeishuLongConnectionTransport, isFeishuWebhookTransport, normalizeFeishuTransport } from "./transport.js";
 import { buildTurnRequestId } from "../turns/requestId.js";
 import { stripAnsi } from "../utils/stripAnsi.js";
+import { normalizeRecognizedCommandText, normalizeRecognizedSlashCommandText } from "../commands/commandText.js";
 
 export function createFeishuRuntime(deps) {
   const {
@@ -1021,15 +1022,34 @@ function normalizeIncomingText(text) {
 }
 
 function normalizeCommandText(text) {
-  const normalized = String(text ?? "").trim();
-  if (!normalized) {
-    return "";
-  }
-  if (normalized.startsWith("/")) {
-    return `!${normalized.slice(1).trim()}`;
-  }
-  return normalized;
+  const normalizedSlashCommand = normalizeRecognizedSlashCommandText(text, FEISHU_TEXT_COMMANDS);
+  return normalizeRecognizedCommandText(normalizedSlashCommand, FEISHU_TEXT_COMMANDS);
 }
+
+const FEISHU_TEXT_COMMANDS = new Set([
+  "help",
+  "ask",
+  "setpath",
+  "status",
+  "new",
+  "restart",
+  "interrupt",
+  "where",
+  "approve",
+  "decline",
+  "cancel",
+  "resync",
+  "rebuild",
+  "initrepo",
+  "setmodel",
+  "clearmodel",
+  "bind",
+  "rebind",
+  "unbind",
+  "mkchannel",
+  "mkbind",
+  "mkrepo"
+]);
 
 function buildLongConnectionEventId(event) {
   const messageId = String(event?.message?.message_id ?? "").trim();

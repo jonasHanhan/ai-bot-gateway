@@ -241,4 +241,33 @@ describe("discord runtime slash commands", () => {
     expect(calls).toEqual([]);
     expect(replies).toEqual([]);
   });
+
+  test("treats unrecognized bang-prefixed text as a prompt instead of a command", async () => {
+    const enqueued: Array<{ repoChannelId: string; promptText: string }> = [];
+    const { runtime, calls } = createRuntime({
+      buildTurnInputFromMessage: async (_message: unknown, text: string) => [{ type: "text", text }],
+      enqueuePrompt: (repoChannelId: string, job: { inputItems: Array<{ text: string }> }) => {
+        enqueued.push({ repoChannelId, promptText: job.inputItems[0]?.text ?? "" });
+      }
+    });
+
+    await runtime.handleMessage({
+      author: { id: "user-1", bot: false },
+      content: "!Volumes/data 1/ rename this path",
+      channelId: "channel-1",
+      channel: {
+        id: "channel-1",
+        name: "repo-one",
+        type: ChannelType.GuildText
+      }
+    });
+
+    expect(calls).toEqual([]);
+    expect(enqueued).toEqual([
+      {
+        repoChannelId: "channel-1",
+        promptText: "!Volumes/data 1/ rename this path"
+      }
+    ]);
+  });
 });
