@@ -23,6 +23,7 @@ export async function startBridgeRuntime({
     console.warn(`failed to ensure general cwd at ${generalChannelCwd}: ${error.message}`);
   });
   const platformStartSummaries = (await platformRegistry?.start?.()) ?? [];
+  const readiness = summarizePlatformReadiness(platformRegistry, platformStartSummaries);
   for (const summary of platformStartSummaries) {
     if (summary?.startError) {
       console.error(`${summary.platformId} startup failed: ${summary.startError.message}`);
@@ -91,6 +92,54 @@ export async function startBridgeRuntime({
   }
   startHeartbeatLoop();
   if (typeof setBackendReady === "function") {
-    setBackendReady(true);
+    setBackendReady(readiness);
   }
+}
+
+function summarizePlatformReadiness(platformRegistry, platformStartSummaries) {
+  const enabledPlatforms = platformRegistry?.listEnabledPlatforms?.() ?? [];
+  const summariesById = new Map(
+    platformStartSummaries
+      .filter(Boolean)
+      .map((summary) => [String(summary.platformId ?? "").trim(), summary])
+      .filter(([platformId]) => platformId)
+  );
+  const degradedPlatforms = [];
+
+  for (const platform of enabledPlatforms) {
+    const platformId = String(platform?.platformId ?? "").trim();
+    if (!platformId) {
+      continue;
+    }
+
+    const summary = summariesById.get(platformId);
+    if (!summary) {
+      degradedPlatforms.push({
+        platformId,
+        reason: "missing_start_summary"
+      });
+      continue;
+    }
+
+    if (summary.startError) {
+      degradedPlatforms.push({
+        platformId,
+        reason: "startup_failed",
+        message: summary.startError.message
+      });
+      continue;
+    }
+
+    if (summary.started !== true) {
+      degradedPlatforms.push({
+        platformId,
+        reason: "not_started"
+      });
+    }
+  }
+
+  return {
+    ready: degradedPlatforms.length === 0,
+    degradedPlatforms
+  };
 }

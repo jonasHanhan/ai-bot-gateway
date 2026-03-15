@@ -71,7 +71,7 @@ export function createCommandRouter(deps) {
       const codexThreadId = binding?.codexThreadId ?? null;
       const activeTurn = findActiveTurnByRepoChannel(context.repoChannelId);
       const sandboxMode = context.setup.sandboxMode ?? config.sandboxMode;
-      const modeLabel = context.setup.mode === "general" ? "general" : "repo channel";
+      const modeLabel = describeContextMode(context.setup);
       const fileWrites = context.setup.allowFileWrites === false ? "disabled" : "enabled";
       await safeReply(
         message,
@@ -120,7 +120,7 @@ export function createCommandRouter(deps) {
     if (command === "!where") {
       const threadId = state.getBinding(context.repoChannelId)?.codexThreadId;
       const sandboxMode = context.setup.sandboxMode ?? config.sandboxMode;
-      const modeLabel = context.setup.mode === "general" ? "general" : "repo channel";
+      const modeLabel = describeContextMode(context.setup);
       const fileWrites = context.setup.allowFileWrites === false ? "disabled" : "enabled";
       const lines = [
         `codex bin: \`${codexBin}\``,
@@ -230,6 +230,14 @@ export function createCommandRouter(deps) {
     }
 
     await safeReply(message, "Unknown command. Use `!help`.");
+  }
+
+  function describeContextMode(setup) {
+    const bindingKind = String(setup?.bindingKind ?? "").trim().toLowerCase();
+    if (bindingKind === "unbound-open") {
+      return "unbound-open";
+    }
+    return setup?.mode === "general" ? "general" : "repo channel";
   }
 
   async function runManagedRouteCommand(message, options = {}) {

@@ -17,8 +17,13 @@ export function createTurnRecoveryStore(deps) {
   const normalizedRecoveryPath = normalize(recoveryPath);
   const resolvedRecoveryPath = resolve(dataDir, normalizedRecoveryPath);
   const resolvedDataDir = resolve(dataDir);
+  const relativeRecoveryPath = path.relative(resolvedDataDir, resolvedRecoveryPath);
 
-  if (!resolvedRecoveryPath.startsWith(resolvedDataDir)) {
+  if (
+    relativeRecoveryPath === ".." ||
+    relativeRecoveryPath.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(relativeRecoveryPath)
+  ) {
     throw new Error(`Invalid recovery path: ${recoveryPath} must be within data directory`);
   }
 

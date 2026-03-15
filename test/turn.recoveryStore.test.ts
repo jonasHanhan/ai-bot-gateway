@@ -29,6 +29,22 @@ async function makeStore() {
 }
 
 describe("turn recovery store", () => {
+  test("rejects recovery paths outside the data directory even when they share a prefix", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-bridge-recovery-"));
+    tempDirs.push(dir);
+    const siblingRecoveryPath = path.join(`${dir}-sibling`, "inflight-turns.json");
+
+    expect(() =>
+      createTurnRecoveryStore({
+        fs,
+        path,
+        recoveryPath: siblingRecoveryPath,
+        debugLog: () => {},
+        dataDir: dir
+      })
+    ).toThrow(/must be within data directory/);
+  });
+
   test("persists and removes in-flight turn checkpoints", async () => {
     const { store, recoveryPath } = await makeStore();
     await store.upsertTurnFromTracker({

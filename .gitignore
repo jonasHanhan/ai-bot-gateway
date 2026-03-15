@@ -16,3 +16,9 @@ com.codex.discord.bridge.plist
 .DS_Store
 .idea/
 .vscode/
+
+# Unrelated local workspace artifacts
+memory/
+monitors/
+polymarket/
+test1234/

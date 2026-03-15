@@ -163,7 +163,8 @@ describe("feishu runtime", () => {
     expect(replies.length).toBe(1);
     expect(replies[0]).toContain("binding: `unbound-open`");
     expect(replies[0]).toContain("cwd: `/tmp/open-feishu`");
-    expect(replies[0]).toContain("sandbox mode: `workspace-write`");
+    expect(replies[0]).toContain("sandbox mode: `read-only`");
+    expect(replies[0]).toContain("file writes: `disabled`");
   });
 
   test("routes /status commands through the shared command handler", async () => {
@@ -253,6 +254,7 @@ describe("feishu runtime", () => {
             setup: {
               cwd: "/tmp/repo",
               model: "gpt-5.3-codex",
+              bindingKind: "repo",
               mode: "repo",
               sandboxMode: "workspace-write",
               allowFileWrites: true
@@ -592,7 +594,7 @@ describe("feishu runtime", () => {
 
     expect(replies).toHaveLength(1);
     expect(replies[0]).toContain("Bridge is ready in this Feishu chat.");
-    expect(replies[0]).toContain("default open Feishu workspace");
+    expect(replies[0]).toContain("default read-only Feishu workspace");
     expect(replies[0]).toContain("cwd: `/tmp/open-welcome`");
     expect(replies[0]).toContain("Use `/ask <prompt>` or `@bot <prompt>` in group chats.");
   });

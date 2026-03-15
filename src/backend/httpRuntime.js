@@ -24,7 +24,10 @@ export function createBackendHttpRuntime(deps) {
   const httpPlatforms = platformRegistry ?? createLegacyPlatformRegistry(feishuRuntime);
 
   let server = null;
-  let ready = false;
+  let readiness = {
+    ready: false,
+    degradedPlatforms: []
+  };
 
   async function start() {
     if (!enabled) {
@@ -76,7 +79,17 @@ export function createBackendHttpRuntime(deps) {
   }
 
   function setReady(nextReady) {
-    ready = nextReady === true;
+    if (typeof nextReady === "object" && nextReady !== null) {
+      readiness = {
+        ready: nextReady.ready === true,
+        degradedPlatforms: Array.isArray(nextReady.degradedPlatforms) ? [...nextReady.degradedPlatforms] : []
+      };
+      return;
+    }
+    readiness = {
+      ready: nextReady === true,
+      degradedPlatforms: []
+    };
   }
 
   function getAddress() {
@@ -93,14 +106,14 @@ export function createBackendHttpRuntime(deps) {
       return;
     }
     if (method === "GET" && pathname === "/readyz") {
-      writeJson(response, ready ? 200 : 503, buildStatusPayload({ includeReady: true }));
+      writeJson(response, readiness.ready ? 200 : 503, buildStatusPayload({ includeReady: true }));
       return;
     }
     if (method === "GET" && pathname === "/") {
       writeJson(response, 200, {
         ok: true,
         service: "codex-chat-bridge",
-        ready,
+        ready: readiness.ready,
         endpoints: [
           "/healthz",
           "/readyz",
@@ -255,7 +268,7 @@ export function createBackendHttpRuntime(deps) {
       return;
     }
 
-    const handledByPlatform = await httpPlatforms?.handleHttpRequest?.(request, response, { ready });
+    const handledByPlatform = await httpPlatforms?.handleHttpRequest?.(request, response, { ready: readiness.ready });
     if (handledByPlatform) {
       return;
     }
@@ -266,11 +279,12 @@ export function createBackendHttpRuntime(deps) {
   function buildStatusPayload(options = {}) {
     return {
       ok: true,
-      ready: options.includeReady ? ready : undefined,
+      ready: options.includeReady ? readiness.ready : undefined,
       startedAt: processStartedAt,
       activeTurns: activeTurns.size,
       pendingApprovals: pendingApprovals.size,
-      mappedChannels: getMappedChannelCount()
+      mappedChannels: getMappedChannelCount(),
+      degradedPlatforms: readiness.degradedPlatforms.length > 0 ? [...readiness.degradedPlatforms] : undefined
     };
   }
 

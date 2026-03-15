@@ -51,7 +51,7 @@ export function createFeishuRuntime(deps) {
     if (!chatId) {
       return null;
     }
-    return createChannel(chatId);
+    return createChannel(chatId, { routeId });
   }
 
   async function handleHttpRequest(request, response, options = {}) {
@@ -410,15 +410,17 @@ export function createFeishuRuntime(deps) {
   }
 
   function createChannel(chatId, options = {}) {
-    const routeId = makeFeishuRouteId(chatId);
-    const isGeneral = feishuGeneralChatId && String(chatId) === String(feishuGeneralChatId);
+    const routeId = String(options.routeId ?? makeFeishuRouteId(chatId)).trim() || makeFeishuRouteId(chatId);
+    const bindingKind = resolveFeishuBindingKind(routeId);
+    const isWritable = bindingKind === "repo";
     return {
       id: routeId,
       chatId,
       platform: "feishu",
       bridgeMeta: {
-        mode: isGeneral ? "general" : "repo",
-        allowFileWrites: !isGeneral
+        mode: isWritable ? "repo" : "general",
+        bindingKind,
+        allowFileWrites: isWritable
       },
       isTextBased() {
         return true;
@@ -842,10 +844,7 @@ export function createFeishuRuntime(deps) {
     if (!context) {
       return "none";
     }
-    if (context.setup.mode === "general") {
-      return "general";
-    }
-    return getChannelSetups()[routeId] ? "repo" : "unbound-open";
+    return resolveFeishuBindingKind(routeId);
   }
 
   function buildFeishuContextOptions() {
@@ -875,6 +874,17 @@ export function createFeishuRuntime(deps) {
         "Tip: send `/where` in this chat to inspect identifiers again."
       ].join("\n")
     );
+  }
+
+  function resolveFeishuBindingKind(routeId) {
+    const normalizedRouteId = String(routeId ?? "").trim();
+    if (!normalizedRouteId) {
+      return "none";
+    }
+    if (feishuGeneralChatId && normalizedRouteId === makeFeishuRouteId(feishuGeneralChatId)) {
+      return "general";
+    }
+    return getChannelSetups()[normalizedRouteId] ? "repo" : "unbound-open";
   }
 
   async function downloadInboundImageAttachment(message) {
@@ -1206,7 +1216,8 @@ function buildFeishuWhereText({ inboundMessage, senderOpenId, context, bindingKi
     return lines.join("\n");
   }
 
-  const threadMode = bindingKind === "unbound-open" ? "unbound-open" : context.setup.mode === "general" ? "general" : "repo";
+  const threadMode =
+    bindingKind === "unbound-open" ? "unbound-open" : context.setup.bindingKind ?? (context.setup.mode === "general" ? "general" : "repo");
   const fileWrites = context.setup.allowFileWrites === false ? "disabled" : "enabled";
   lines.push(`binding: \`${threadMode}\``);
   lines.push(`cwd: \`${context.setup.cwd}\``);
@@ -1232,7 +1243,7 @@ function buildFeishuBotAddedText({ chatId, operatorOpenId, context, bindingKind,
   if (bindingKind === "general") {
     lines.push("This chat is using the read-only Feishu general workspace.");
   } else if (bindingKind === "unbound-open") {
-    lines.push("This new chat is usable immediately with the default open Feishu workspace.");
+    lines.push("This new chat is usable immediately with the default read-only Feishu workspace.");
   } else {
     lines.push("This chat is already bound to a repo workspace.");
   }

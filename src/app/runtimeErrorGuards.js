@@ -41,9 +41,20 @@ export function registerRuntimeErrorGuards({ processRef = process, shutdown } = 
       console.warn(`ignoring unhandled Discord gateway rejection: ${error.message}`);
       return;
     }
+    if (!shouldGracefullyShutdownForRejection(reason)) {
+      return;
+    }
     console.error(`unhandled rejection: ${error.stack ?? error.message}`);
     terminateProcess({ processRef, shutdown });
   });
+}
+
+function shouldGracefullyShutdownForRejection(reason) {
+  if (!(reason instanceof Error)) {
+    return false;
+  }
+
+  return String(reason?.name ?? "") !== "AbortError" && String(reason?.code ?? "") !== "ABORT_ERR";
 }
 
 function terminateProcess({ processRef, shutdown }) {

@@ -68,4 +68,33 @@ describe("runtime error guards", () => {
     expect(errors.some((line) => line.includes("uncaught exception: Error: boom"))).toBe(true);
     expect(exits).toEqual([1]);
   });
+
+  test("ignores AbortError unhandled rejections", async () => {
+    const processRef = new EventEmitter() as EventEmitter & {
+      exitCode?: number;
+      exit: (code: number) => void;
+      [key: symbol]: boolean | undefined;
+    };
+    const exits: number[] = [];
+    const errors: string[] = [];
+    processRef.exit = (code: number) => {
+      exits.push(code);
+    };
+
+    const originalError = console.error;
+    console.error = (message?: unknown) => {
+      errors.push(String(message ?? ""));
+    };
+
+    try {
+      registerRuntimeErrorGuards({ processRef });
+      processRef.emit("unhandledRejection", Object.assign(new Error("abort"), { name: "AbortError" }));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    } finally {
+      console.error = originalError;
+    }
+
+    expect(errors).toEqual([]);
+    expect(exits).toEqual([]);
+  });
 });

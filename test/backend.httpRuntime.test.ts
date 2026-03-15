@@ -228,6 +228,54 @@ describe("backend http runtime", () => {
     expect((await readyAfter.json()).ready).toBe(true);
   });
 
+  test("reports degraded platforms in readiness payloads", async () => {
+    const { runtime } = createTestRuntime({
+      enabled: true,
+      host: "127.0.0.1",
+      port: 0,
+      processStartedAt: "2026-03-13T00:00:00.000Z",
+      activeTurns: new Map(),
+      pendingApprovals: new Map(),
+      getMappedChannelCount: () => 1,
+      feishuRuntime: { enabled: false }
+    });
+    await runtime.start();
+    const address = runtime.getAddress();
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+
+    runtime.setReady({
+      ready: false,
+      degradedPlatforms: [
+        {
+          platformId: "discord",
+          reason: "startup_failed",
+          message: "discord startup timed out"
+        }
+      ]
+    });
+
+    const health = await fetch(`${baseUrl}/healthz`);
+    expect(health.status).toBe(200);
+    expect(await health.json()).toEqual({
+      ok: true,
+      ready: false,
+      startedAt: "2026-03-13T00:00:00.000Z",
+      activeTurns: 0,
+      pendingApprovals: 0,
+      mappedChannels: 1,
+      degradedPlatforms: [
+        {
+          platformId: "discord",
+          reason: "startup_failed",
+          message: "discord startup timed out"
+        }
+      ]
+    });
+
+    const ready = await fetch(`${baseUrl}/readyz`);
+    expect(ready.status).toBe(503);
+  });
+
   test("delegates Feishu webhook requests to the Feishu runtime", async () => {
     const calls = [];
     const { runtime } = createTestRuntime({
