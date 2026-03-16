@@ -1,6 +1,7 @@
 {
   "autoDiscoverProjects": true,
   "defaultModel": "gpt-5.3-codex",
+  "defaultAgent": "codex-default",
   "defaultEffort": "medium",
   "approvalPolicy": "never",
   "sandboxMode": "workspace-write",
@@ -10,14 +11,32 @@
   "allowedFeishuUserIds": [
     "ou_xxxxxxxxxxxxxxxxx"
   ],
+  "agents": {
+    "codex-default": {
+      "model": "gpt-5.3-codex",
+      "enabled": true,
+      "capabilities": {
+        "supportsImageInput": true
+      }
+    },
+    "codex-lite": {
+      "model": "gpt-5.3-codex",
+      "enabled": true,
+      "capabilities": {
+        "supportsImageInput": false
+      }
+    }
+  },
   "channels": {
     "123456789012345678": {
       "cwd": "/absolute/path/to/discord/repo",
-      "model": "gpt-5.3-codex"
+      "model": "gpt-5.3-codex",
+      "agentId": "codex-default"
     },
     "feishu:oc_xxxxxxxxxxxxxxxxx": {
       "cwd": "/absolute/path/to/feishu/repo",
-      "model": "gpt-5.3-codex"
+      "model": "gpt-5.3-codex",
+      "agentId": "codex-lite"
     }
   }
 }

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createRuntimeAdapters } from "../src/app/runtimeAdapters.js";
+import { createRuntimeContainer } from "../src/app/runtimeContainer.js";
 
 function makeAdapters(overrides: Record<string, unknown> = {}) {
   const calls: Array<{ type: string; payload: unknown }> = [];
@@ -62,14 +63,27 @@ function makeAdapters(overrides: Record<string, unknown> = {}) {
     handleInteraction: async (interaction: unknown) => calls.push({ type: "interaction", payload: interaction })
   };
 
+  const runtimeContainer = createRuntimeContainer();
+  const runtimeRefs = {
+    runtimeOps,
+    turnRunner,
+    notificationRuntime,
+    serverRequestRuntime,
+    discordRuntime,
+    ...(typeof overrides.runtimeRefs === "object" && overrides.runtimeRefs
+      ? (overrides.runtimeRefs as Record<string, unknown>)
+      : {})
+  };
+  for (const [name, value] of Object.entries(runtimeRefs)) {
+    if (value == null) {
+      continue;
+    }
+    runtimeContainer.setRef(name, value);
+  }
+
   const adapters = createRuntimeAdapters({
     attachmentInputBuilder,
-    getTurnRunner: () => turnRunner,
-    getNotificationRuntime: () => notificationRuntime,
-    getServerRequestRuntime: () => serverRequestRuntime,
-    getDiscordRuntime: () => discordRuntime,
-    getRuntimeOps: () => runtimeOps,
-    getDiscord: () => ({ id: "discord" }),
+    runtimeContainer,
     maybeSendAttachmentsForItemFromService: async (_tracker: unknown, _item: unknown, options: Record<string, unknown>) =>
       calls.push({ type: "attachments", payload: options }),
     maybeSendInferredAttachmentsFromTextFromService: async (
@@ -170,15 +184,15 @@ describe("runtime adapters", () => {
     expect(calls.some((entry) => entry.type === "sendChunked")).toBe(true);
   });
 
-  test("returns fallback approval result when server runtime is unavailable", async () => {
+  test("throws when approval runtime is unavailable", async () => {
     const { adapters } = makeAdapters({
-      getServerRequestRuntime: () => null
+      runtimeRefs: {
+        serverRequestRuntime: null
+      }
     });
-    const result = await adapters.applyApprovalDecision("0001", "accept", "@user");
-    expect(result).toEqual({
-      ok: false,
-      error: "Approval runtime unavailable"
-    });
+    await expect(adapters.applyApprovalDecision("0001", "accept", "@user")).rejects.toThrow(
+      "serverRequestRuntime"
+    );
   });
 
   test("forces attachment issue suppression for read-only turns", async () => {
@@ -190,26 +204,23 @@ describe("runtime adapters", () => {
     expect(options.maxAttachmentIssueMessages).toBe(0);
   });
 
-  test("falls back safely when runtime services are unavailable", async () => {
+  test("throws explicit initialization error when required runtimes are missing", async () => {
     const { adapters } = makeAdapters({
-      getRuntimeOps: () => null,
-      getTurnRunner: () => null,
-      getNotificationRuntime: () => null,
-      getServerRequestRuntime: () => null
+      runtimeRefs: {
+        runtimeOps: null,
+        turnRunner: null,
+        notificationRuntime: null,
+        serverRequestRuntime: null,
+        discordRuntime: null
+      }
     });
 
-    adapters.startHeartbeatLoop();
-    await adapters.writeHeartbeatFile();
-    await adapters.requestSelfRestartFromDiscord({ id: "m" }, "test");
-    await adapters.maybeCompletePendingRestartNotice();
-    expect(adapters.shouldHandleAsSelfRestartRequest("restart")).toBe(false);
-    adapters.enqueuePrompt("repo-1", { prompt: "noop" });
-    expect(adapters.getQueue("repo-1")).toBeUndefined();
-    expect(adapters.findLatestPendingApprovalTokenForChannel("repo-1")).toBeNull();
-    expect(adapters.findActiveTurnByRepoChannel("repo-1")).toBeUndefined();
-    await adapters.handleNotification({ method: "noop", params: {} });
-    await adapters.handleServerRequest({ id: "noop", method: "noop", params: {} });
-    adapters.onTurnReconnectPending("thread-1");
-    await adapters.finalizeTurn("thread-1", null);
+    expect(() => adapters.startHeartbeatLoop()).toThrow("runtimeOps");
+    expect(() => adapters.enqueuePrompt("repo-1", { prompt: "noop" })).toThrow("turnRunner");
+    await expect(adapters.handleNotification({ method: "noop", params: {} })).rejects.toThrow("notificationRuntime");
+    await expect(adapters.handleServerRequest({ id: "noop", method: "noop", params: {} })).rejects.toThrow(
+      "serverRequestRuntime"
+    );
+    await expect(adapters.handleMessage({ id: "msg-1" })).rejects.toThrow("before platform runtimes are attached");
   });
 });

@@ -67,7 +67,7 @@ export function createTurnRunner(deps) {
           throw new Error("Cannot send response in this channel (channel unavailable).");
         }
 
-        const model = job.setup.model ?? config.defaultModel;
+        const model = job.setup.resolvedModel ?? job.setup.model ?? config.defaultModel;
         const effort = config.defaultEffort;
         const approvalPolicy = config.approvalPolicy;
         const sandboxMode = job.setup.sandboxMode ?? config.sandboxMode;
@@ -256,7 +256,7 @@ export function createTurnRunner(deps) {
     }
 
     const startParams = { cwd: setup.cwd };
-    const model = setup.model ?? config.defaultModel;
+    const model = setup.resolvedModel ?? setup.model ?? config.defaultModel;
     const effort = config.defaultEffort;
     if (model) {
       startParams.model = model;

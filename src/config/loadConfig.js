@@ -30,15 +30,41 @@ export async function loadConfig(filePath, options = {}) {
       normalizedChannels[channelId] = { cwd: path.resolve(value) };
       continue;
     }
-    if (typeof value === "object" && typeof value.cwd === "string") {
+    if (value && typeof value === "object" && typeof value.cwd === "string") {
+      const explicitAgentId =
+        typeof value.agentId === "string" ? value.agentId : typeof value.agent === "string" ? value.agent : undefined;
       normalizedChannels[channelId] = {
         cwd: path.resolve(value.cwd),
-        model: typeof value.model === "string" ? value.model : undefined
+        model: typeof value.model === "string" ? value.model : undefined,
+        ...(typeof explicitAgentId === "string" ? { agentId: explicitAgentId } : {})
       };
       continue;
     }
-    throw new Error(`Mapping ${channelId} must map to a cwd string or { cwd, model? } object`);
+    throw new Error(`Mapping ${channelId} must map to a cwd string or { cwd, model?, agentId? } object`);
   }
+
+  const normalizedAgents = {};
+  const rawAgents = parsed && typeof parsed.agents === "object" && !Array.isArray(parsed.agents) ? parsed.agents : {};
+  for (const [agentId, value] of Object.entries(rawAgents)) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      continue;
+    }
+    const capabilities =
+      value.capabilities && typeof value.capabilities === "object" && !Array.isArray(value.capabilities)
+        ? Object.fromEntries(
+            Object.entries(value.capabilities)
+              .map(([name, enabled]) => [String(name).trim(), enabled === true])
+              .filter(([name]) => name.length > 0)
+          )
+        : undefined;
+    normalizedAgents[agentId] = {
+      ...(typeof value.model === "string" ? { model: value.model.trim() } : {}),
+      ...(typeof value.enabled === "boolean" ? { enabled: value.enabled } : {}),
+      ...(capabilities ? { capabilities } : {}),
+      ...(value.meta && typeof value.meta === "object" && !Array.isArray(value.meta) ? { meta: value.meta } : {})
+    };
+  }
+  const defaultAgent = typeof parsed.defaultAgent === "string" ? parsed.defaultAgent.trim() : "";
 
   let allowedUserIds = Array.isArray(parsed.allowedUserIds)
     ? parsed.allowedUserIds.filter((value) => typeof value === "string")
@@ -103,6 +129,8 @@ export async function loadConfig(filePath, options = {}) {
 
   return {
     channels: normalizedChannels,
+    defaultAgent: defaultAgent || null,
+    agents: normalizedAgents,
     defaultModel:
       typeof parsed.defaultModel === "string" && parsed.defaultModel.trim().length > 0
         ? parsed.defaultModel.trim()

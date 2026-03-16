@@ -299,4 +299,59 @@ describe("discord runtime slash commands", () => {
       }
     ]);
   });
+
+  test("blocks image prompts when current agent does not support image input", async () => {
+    const replies: string[] = [];
+    let buildCalled = 0;
+    const enqueued: Array<unknown> = [];
+    const { runtime } = createRuntime({
+      config: {
+        allowedUserIds: ["user-1"],
+        defaultModel: "gpt-5.3-codex",
+        sandboxMode: "workspace-write",
+        defaultAgent: "codex",
+        agents: {
+          codex: { capabilities: { supportsImageInput: true } },
+          claude: { capabilities: { supportsImageInput: false } }
+        }
+      },
+      resolveRepoContext: (message: { channelId: string }) => ({
+        repoChannelId: message.channelId,
+        setup: {
+          cwd: "/tmp/repo-one",
+          model: "gpt-5.3-codex",
+          mode: "repo",
+          sandboxMode: "workspace-write",
+          allowFileWrites: true,
+          agentId: "claude"
+        }
+      }),
+      collectImageAttachments: () => [{ attachment: "https://example.com/a.png", contentType: "image/png" }],
+      buildTurnInputFromMessage: async () => {
+        buildCalled += 1;
+        return [{ type: "text", text: "x" }];
+      },
+      enqueuePrompt: (_repoChannelId: string, job: unknown) => {
+        enqueued.push(job);
+      }
+    });
+
+    await runtime.handleMessage({
+      author: { id: "user-1", bot: false },
+      content: "",
+      channelId: "channel-1",
+      channel: {
+        id: "channel-1",
+        name: "repo-one",
+        type: ChannelType.GuildText
+      },
+      async reply(content: string) {
+        replies.push(content);
+      }
+    });
+
+    expect(buildCalled).toBe(0);
+    expect(enqueued).toEqual([]);
+    expect(replies.at(-1)).toContain("Image input is not supported for `claude`");
+  });
 });

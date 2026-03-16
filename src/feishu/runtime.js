@@ -8,6 +8,7 @@ import { isFeishuLongConnectionTransport, isFeishuWebhookTransport, normalizeFei
 import { buildTurnRequestId } from "../turns/requestId.js";
 import { stripAnsi } from "../utils/stripAnsi.js";
 import { normalizeRecognizedCommandText, normalizeRecognizedSlashCommandText } from "../commands/commandText.js";
+import { getActiveAgentId, setupSupportsImageInput } from "../agents/setupResolution.js";
 
 export function createFeishuRuntime(deps) {
   const {
@@ -319,6 +320,16 @@ export function createFeishuRuntime(deps) {
 
     if (!imageAttachment) {
       await safeReply(inboundMessage, "I could not extract an image from that Feishu message.");
+      return;
+    }
+
+    if (!setupSupportsImageInput(context.setup, config)) {
+      const activeAgent = getActiveAgentId(context.setup, config);
+      const agentLabel = activeAgent ? `\`${activeAgent}\`` : "current agent";
+      await safeReply(
+        inboundMessage,
+        `Image input is not supported for ${agentLabel}. Switch agent with \`!setagent <agent-id>\` or send text only.`
+      );
       return;
     }
 
@@ -1241,7 +1252,7 @@ function buildFeishuWhereText({ inboundMessage, senderOpenId, context, bindingKi
   const fileWrites = context.setup.allowFileWrites === false ? "disabled" : "enabled";
   lines.push(`binding: \`${threadMode}\``);
   lines.push(`cwd: \`${context.setup.cwd}\``);
-  lines.push(`model: \`${context.setup.model}\``);
+  lines.push(`model: \`${context.setup.resolvedModel ?? context.setup.model}\``);
   lines.push(`sandbox mode: \`${context.setup.sandboxMode}\``);
   lines.push(`file writes: \`${fileWrites}\``);
   return lines.join("\n");
@@ -1269,6 +1280,7 @@ function buildFeishuBotAddedText({ chatId, operatorOpenId, context, bindingKind,
   }
 
   lines.push(`cwd: \`${context.setup.cwd}\``);
+  lines.push(`model: \`${context.setup.resolvedModel ?? context.setup.model}\``);
   lines.push("Try `/where` to inspect identifiers or `/setpath /absolute/path` to switch workspaces.");
   lines.push(
     requireMentionInGroup

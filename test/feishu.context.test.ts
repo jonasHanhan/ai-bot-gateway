@@ -63,7 +63,7 @@ describe("feishu context", () => {
       repoChannelId: routeId,
       setup: {
         cwd: "/tmp/general",
-        model: "gpt-5.3-codex",
+        resolvedModel: "gpt-5.3-codex",
         bindingKind: "general",
         mode: "general",
         sandboxMode: "read-only",
@@ -99,12 +99,43 @@ describe("feishu context", () => {
       repoChannelId: routeId,
       setup: {
         cwd: "/tmp/open-feishu",
-        model: "gpt-5.3-codex",
+        resolvedModel: "gpt-5.3-codex",
         bindingKind: "unbound-open",
         mode: "general",
         sandboxMode: "read-only",
         allowFileWrites: false
       }
     });
+  });
+
+  test("resolves mapped repo chat model from default agent when model override is absent", () => {
+    const routeId = makeFeishuRouteId("oc_repo_2");
+    const context = resolveFeishuContext(
+      {
+        channelId: routeId
+      },
+      {
+        channelSetups: {
+          [routeId]: {
+            cwd: "/tmp/repo-no-model"
+          }
+        },
+        config: {
+          defaultModel: "gpt-5.3-codex",
+          sandboxMode: "workspace-write",
+          defaultAgent: "codex",
+          agents: {
+            codex: { model: "gpt-5.4-codex" }
+          }
+        },
+        generalChat: {
+          id: "oc_general",
+          cwd: "/tmp/general"
+        }
+      }
+    );
+
+    expect(context?.setup.model).toBeUndefined();
+    expect(context?.setup.resolvedModel).toBe("gpt-5.4-codex");
   });
 });

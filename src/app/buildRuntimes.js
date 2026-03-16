@@ -10,19 +10,29 @@ import { createFeishuPlatform } from "../platforms/feishuPlatform.js";
 
 export function buildBridgeRuntimes(deps) {
   const {
-    ChannelType,
-    MessageFlags,
+    platformTypes,
+    runtimeContext,
+    runtimeEnv,
+    runtimeServices,
+    channelSetupStore,
+    ioRuntime
+  } = deps;
+  const { ChannelType, MessageFlags } = platformTypes;
+  const {
     path,
     fs,
     execFileAsync,
     discord,
+    discordToken,
     fetchChannelByRouteId,
     processStartedAt,
     codex,
     config,
     state,
     activeTurns,
-    pendingApprovals,
+    pendingApprovals
+  } = runtimeContext;
+  const {
     approvalButtonPrefix,
     projectsCategoryName,
     managedChannelTopicPrefix,
@@ -42,7 +52,6 @@ export function buildBridgeRuntimes(deps) {
     generalChannelId,
     generalChannelName,
     generalChannelCwd,
-    waitForDiscordReady,
     feishuEnabled,
     feishuAppId,
     feishuAppSecret,
@@ -58,10 +67,10 @@ export function buildBridgeRuntimes(deps) {
     feishuUnboundChatCwd,
     feishuRequireMentionInGroup,
     feishuSegmentedStreaming,
-    feishuStreamMinChars,
-    isDiscordMissingPermissionsError,
-    getChannelSetups,
-    setChannelSetups,
+    feishuStreamMinChars
+  } = runtimeEnv;
+  const { getChannelSetups, setChannelSetups } = channelSetupStore;
+  const {
     runtimeAdapters,
     safeReply,
     safeSendToChannel,
@@ -69,7 +78,8 @@ export function buildBridgeRuntimes(deps) {
     turnRecoveryStore,
     createApprovalToken,
     sendChunkedToChannel
-  } = deps;
+  } = runtimeServices;
+  const { waitForDiscordReady, isDiscordMissingPermissionsError } = ioRuntime;
 
   let platformRegistry = null;
   const getPlatformRegistry = () => platformRegistry;
@@ -195,7 +205,7 @@ export function buildBridgeRuntimes(deps) {
   platformRegistry = createPlatformRegistry([
     createDiscordPlatform({
       discord,
-      discordToken: deps.discordToken,
+      discordToken,
       waitForDiscordReady,
       runtime: discordRuntime,
       bootstrapChannelMappings

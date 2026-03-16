@@ -53,7 +53,8 @@ async function createRouterHarness(initialSetups = {}, configDocument = null, op
     config: {
       defaultModel: "gpt-5.3-codex",
       sandboxMode: "workspace-write",
-      approvalPolicy: "never"
+      approvalPolicy: "never",
+      ...(options.configOverrides ?? {})
     },
     state,
     codex: { request: async () => ({}) },
@@ -339,6 +340,258 @@ describe("bind commands", () => {
         }
       }
     });
+  });
+
+  test("setagent persists an explicit agent override for a bound channel", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "dc-bridge-setagent-"));
+    tempDirs.push(dir);
+    const { router, replies, getChannelSetups, configPath } = await createRouterHarness(
+      {
+        "channel-1": { cwd: dir }
+      },
+      {
+        autoDiscoverProjects: false,
+        channels: {
+          "channel-1": { cwd: dir }
+        },
+        defaultAgent: "codex",
+        agents: {
+          codex: { model: "gpt-5.3-codex" },
+          claude: { model: "claude-3.7-sonnet" }
+        }
+      },
+      {
+        configOverrides: {
+          defaultAgent: "codex",
+          agents: {
+            codex: { model: "gpt-5.3-codex" },
+            claude: { model: "claude-3.7-sonnet" }
+          }
+        }
+      }
+    );
+    const message = createMessage();
+    const context = {
+      repoChannelId: "channel-1",
+      setup: {
+        cwd: dir,
+        mode: "repo"
+      }
+    };
+
+    await router.handleCommand(message, "!setagent claude", context);
+
+    expect(getChannelSetups()).toEqual({
+      "channel-1": {
+        cwd: dir,
+        agentId: "claude"
+      }
+    });
+    expect(replies.at(-1)).toContain("Set this channel agent override to `claude`.");
+    expect(JSON.parse(await fs.readFile(configPath, "utf8"))).toEqual({
+      autoDiscoverProjects: false,
+      channels: {
+        "channel-1": {
+          cwd: dir,
+          agentId: "claude"
+        }
+      },
+      defaultAgent: "codex",
+      agents: {
+        codex: { model: "gpt-5.3-codex" },
+        claude: { model: "claude-3.7-sonnet" }
+      }
+    });
+  });
+
+  test("clearagent removes an explicit agent override and falls back to default", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "dc-bridge-clearagent-"));
+    tempDirs.push(dir);
+    const { router, replies, getChannelSetups, configPath } = await createRouterHarness(
+      {
+        "channel-1": { cwd: dir, agentId: "claude" }
+      },
+      {
+        autoDiscoverProjects: false,
+        channels: {
+          "channel-1": { cwd: dir, agentId: "claude" }
+        },
+        defaultAgent: "codex",
+        agents: {
+          codex: { model: "gpt-5.3-codex" },
+          claude: { model: "claude-3.7-sonnet" }
+        }
+      },
+      {
+        configOverrides: {
+          defaultAgent: "codex",
+          agents: {
+            codex: { model: "gpt-5.3-codex" },
+            claude: { model: "claude-3.7-sonnet" }
+          }
+        }
+      }
+    );
+    const message = createMessage();
+    const context = {
+      repoChannelId: "channel-1",
+      setup: {
+        cwd: dir,
+        mode: "repo",
+        agentId: "claude"
+      }
+    };
+
+    await router.handleCommand(message, "!clearagent", context);
+
+    expect(getChannelSetups()).toEqual({
+      "channel-1": {
+        cwd: dir
+      }
+    });
+    expect(replies.at(-1)).toContain("Cleared this channel agent override.");
+    expect(JSON.parse(await fs.readFile(configPath, "utf8"))).toEqual({
+      autoDiscoverProjects: false,
+      channels: {
+        "channel-1": {
+          cwd: dir
+        }
+      },
+      defaultAgent: "codex",
+      agents: {
+        codex: { model: "gpt-5.3-codex" },
+        claude: { model: "claude-3.7-sonnet" }
+      }
+    });
+  });
+
+  test("setagent rejects unknown configured agent ids", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "dc-bridge-setagent-unknown-"));
+    tempDirs.push(dir);
+    const { router, replies, getChannelSetups } = await createRouterHarness(
+      {
+        "channel-1": { cwd: dir }
+      },
+      {
+        channels: {
+          "channel-1": { cwd: dir }
+        },
+        defaultAgent: "codex",
+        agents: {
+          codex: { model: "gpt-5.3-codex" }
+        }
+      },
+      {
+        configOverrides: {
+          defaultAgent: "codex",
+          agents: {
+            codex: { model: "gpt-5.3-codex" }
+          }
+        }
+      }
+    );
+    const message = createMessage();
+    const context = {
+      repoChannelId: "channel-1",
+      setup: {
+        cwd: dir,
+        mode: "repo"
+      }
+    };
+
+    await router.handleCommand(message, "!setagent claude", context);
+
+    expect(getChannelSetups()).toEqual({
+      "channel-1": {
+        cwd: dir
+      }
+    });
+    expect(replies.at(-1)).toContain("Unknown agent `claude`");
+  });
+
+  test("setagent requires configured agents", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "dc-bridge-setagent-no-agents-"));
+    tempDirs.push(dir);
+    const { router, replies, getChannelSetups } = await createRouterHarness(
+      {
+        "channel-1": { cwd: dir }
+      },
+      {
+        channels: {
+          "channel-1": { cwd: dir }
+        }
+      },
+      {
+        configOverrides: {
+          agents: {}
+        }
+      }
+    );
+    const message = createMessage();
+    const context = {
+      repoChannelId: "channel-1",
+      setup: {
+        cwd: dir,
+        mode: "repo"
+      }
+    };
+
+    await router.handleCommand(message, "!setagent codex", context);
+
+    expect(getChannelSetups()).toEqual({
+      "channel-1": {
+        cwd: dir
+      }
+    });
+    expect(replies.at(-1)).toContain("No agents configured in `channels.json`");
+  });
+
+  test("agents lists configured agents and current selection", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "dc-bridge-agents-list-"));
+    tempDirs.push(dir);
+    const { router, replies } = await createRouterHarness(
+      {
+        "channel-1": { cwd: dir, agentId: "claude" }
+      },
+      {
+        channels: {
+          "channel-1": { cwd: dir, agentId: "claude" }
+        },
+        defaultAgent: "codex",
+        agents: {
+          codex: { model: "gpt-5.3-codex", capabilities: { supportsImageInput: true } },
+          claude: { model: "claude-3.7-sonnet", capabilities: { supportsImageInput: false } }
+        }
+      },
+      {
+        configOverrides: {
+          defaultAgent: "codex",
+          agents: {
+            codex: { model: "gpt-5.3-codex", capabilities: { supportsImageInput: true } },
+            claude: { model: "claude-3.7-sonnet", capabilities: { supportsImageInput: false } }
+          }
+        }
+      }
+    );
+    const message = createMessage();
+    const context = {
+      repoChannelId: "channel-1",
+      setup: {
+        cwd: dir,
+        mode: "repo",
+        agentId: "claude"
+      }
+    };
+
+    await router.handleCommand(message, "!agents", context);
+
+    const output = replies.at(-1) ?? "";
+    expect(output).toContain("default agent: `codex`");
+    expect(output).toContain("current agent: `claude`");
+    expect(output).toContain("`codex`");
+    expect(output).toContain("`claude`");
+    expect(output).toContain("image✅");
+    expect(output).toContain("image❌");
   });
 
   test("mkchannel creates a new text channel under the same parent and avoids name collisions", async () => {

@@ -129,6 +129,7 @@ describe("runtime env", () => {
 
   test("uses WORKSPACE_ROOT as the default Feishu unbound cwd", () => {
     process.env.WORKSPACE_ROOT = "/tmp/shared-projects-root";
+    delete process.env.FEISHU_UNBOUND_CHAT_CWD;
 
     const env = loadRuntimeEnv();
 
@@ -139,6 +140,7 @@ describe("runtime env", () => {
   test("accepts PROJECTS_ROOT as a legacy alias", () => {
     delete process.env.WORKSPACE_ROOT;
     delete process.env.DISCORD_REPO_ROOT;
+    delete process.env.FEISHU_UNBOUND_CHAT_CWD;
     process.env.PROJECTS_ROOT = "/tmp/legacy-projects-root";
 
     const env = loadRuntimeEnv();

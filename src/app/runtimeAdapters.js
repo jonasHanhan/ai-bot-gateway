@@ -1,12 +1,7 @@
 export function createRuntimeAdapters(deps) {
   const {
     attachmentInputBuilder,
-    getTurnRunner,
-    getNotificationRuntime,
-    getServerRequestRuntime,
-    getDiscordRuntime,
-    getPlatformRegistry,
-    getRuntimeOps,
+    runtimeContainer,
     maybeSendAttachmentsForItemFromService,
     maybeSendInferredAttachmentsFromTextFromService,
     sendChunkedToChannelFromRenderer,
@@ -14,46 +9,69 @@ export function createRuntimeAdapters(deps) {
     channelMessagingConfig
   } = deps;
 
+  function getOptionalRuntime(name) {
+    return runtimeContainer.getRef(name);
+  }
+
+  function getRequiredRuntime(name) {
+    return runtimeContainer.requireRef(name);
+  }
+
   function startHeartbeatLoop() {
-    getRuntimeOps()?.startHeartbeatLoop();
+    getRequiredRuntime("runtimeOps").startHeartbeatLoop();
   }
 
   async function writeHeartbeatFile() {
-    await getRuntimeOps()?.writeHeartbeatFile();
+    await getRequiredRuntime("runtimeOps").writeHeartbeatFile();
   }
 
   async function requestSelfRestartFromDiscord(message, reason) {
-    await getRuntimeOps()?.requestSelfRestartFromDiscord(message, reason);
+    await getRequiredRuntime("runtimeOps").requestSelfRestartFromDiscord(message, reason);
   }
 
   async function maybeCompletePendingRestartNotice() {
-    await getRuntimeOps()?.maybeCompletePendingRestartNotice();
+    await getRequiredRuntime("runtimeOps").maybeCompletePendingRestartNotice();
   }
 
   function shouldHandleAsSelfRestartRequest(content) {
-    return getRuntimeOps()?.shouldHandleAsSelfRestartRequest(content) ?? false;
+    return getRequiredRuntime("runtimeOps").shouldHandleAsSelfRestartRequest(content);
   }
 
   async function handleMessage(message) {
-    const platformRegistry = typeof getPlatformRegistry === "function" ? getPlatformRegistry() : null;
+    const platformRegistry = getOptionalRuntime("platformRegistry");
     if (platformRegistry?.handleInboundMessage) {
       await platformRegistry.handleInboundMessage(message);
       return;
     }
-    await getDiscordRuntime?.()?.handleMessage(message);
+    const discordRuntime = getOptionalRuntime("discordRuntime");
+    if (discordRuntime?.handleMessage) {
+      await discordRuntime.handleMessage(message);
+      return;
+    }
+    throw new Error("Runtime adapter cannot handle message before platform runtimes are attached.");
   }
 
   async function handleInteraction(interaction) {
-    const platformRegistry = typeof getPlatformRegistry === "function" ? getPlatformRegistry() : null;
+    const platformRegistry = getOptionalRuntime("platformRegistry");
     if (platformRegistry?.handleInboundInteraction) {
       await platformRegistry.handleInboundInteraction(interaction);
       return;
     }
-    await getDiscordRuntime?.()?.handleInteraction(interaction);
+    const discordRuntime = getOptionalRuntime("discordRuntime");
+    if (discordRuntime?.handleInteraction) {
+      await discordRuntime.handleInteraction(interaction);
+      return;
+    }
+    throw new Error("Runtime adapter cannot handle interaction before platform runtimes are attached.");
   }
 
   async function handleChannelCreate(channel) {
-    await getDiscordRuntime?.()?.handleChannelCreate(channel);
+    const discordRuntime = getOptionalRuntime("discordRuntime");
+    if (discordRuntime?.handleChannelCreate) {
+      await discordRuntime.handleChannelCreate(channel);
+      return;
+    }
+    throw new Error("Runtime adapter cannot handle channelCreate before discord runtime is attached.");
   }
 
   function collectImageAttachments(message) {
@@ -65,44 +83,39 @@ export function createRuntimeAdapters(deps) {
   }
 
   function enqueuePrompt(repoChannelId, job) {
-    getTurnRunner()?.enqueuePrompt(repoChannelId, job);
+    getRequiredRuntime("turnRunner").enqueuePrompt(repoChannelId, job);
   }
 
   function getQueue(repoChannelId) {
-    return getTurnRunner()?.getQueue(repoChannelId);
+    return getRequiredRuntime("turnRunner").getQueue(repoChannelId);
   }
 
   async function handleNotification({ method, params }) {
-    await getNotificationRuntime()?.handleNotification({ method, params });
+    await getRequiredRuntime("notificationRuntime").handleNotification({ method, params });
   }
 
   function onTurnReconnectPending(threadId, context = {}) {
-    getNotificationRuntime()?.onTurnReconnectPending(threadId, context);
+    getRequiredRuntime("notificationRuntime").onTurnReconnectPending(threadId, context);
   }
 
   async function handleServerRequest({ id, method, params }) {
-    await getServerRequestRuntime()?.handleServerRequest({ id, method, params });
+    await getRequiredRuntime("serverRequestRuntime").handleServerRequest({ id, method, params });
   }
 
   function findLatestPendingApprovalTokenForChannel(repoChannelId) {
-    return getServerRequestRuntime()?.findLatestPendingApprovalTokenForChannel(repoChannelId) ?? null;
+    return getRequiredRuntime("serverRequestRuntime").findLatestPendingApprovalTokenForChannel(repoChannelId);
   }
 
   async function applyApprovalDecision(token, decision, actorMention) {
-    return (
-      (await getServerRequestRuntime()?.applyApprovalDecision(token, decision, actorMention)) ?? {
-        ok: false,
-        error: "Approval runtime unavailable"
-      }
-    );
+    return await getRequiredRuntime("serverRequestRuntime").applyApprovalDecision(token, decision, actorMention);
   }
 
   function findActiveTurnByRepoChannel(repoChannelId) {
-    return getTurnRunner()?.findActiveTurnByRepoChannel(repoChannelId);
+    return getRequiredRuntime("turnRunner").findActiveTurnByRepoChannel(repoChannelId);
   }
 
   async function finalizeTurn(threadId, error) {
-    await getNotificationRuntime()?.finalizeTurn(threadId, error);
+    await getRequiredRuntime("notificationRuntime").finalizeTurn(threadId, error);
   }
 
   async function maybeSendAttachmentsForItem(tracker, item) {
