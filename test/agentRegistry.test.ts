@@ -23,6 +23,18 @@ describe("agentRegistry", () => {
     expect(registry.getDefaultAgentId()).toBe("claude");
   });
 
+  test("falls back when explicit default agent is disabled", () => {
+    const registry = createAgentRegistry(
+      [
+        { agentId: "codex", enabled: true },
+        { agentId: "claude", enabled: false }
+      ],
+      "claude"
+    );
+
+    expect(registry.getDefaultAgentId()).toBe("codex");
+  });
+
   test("supports capability checks", () => {
     const registry = createAgentRegistry([
       {
@@ -41,4 +53,3 @@ describe("agentRegistry", () => {
     expect(registry.anyAgentSupports("supportsStructuredToolCalls")).toBe(false);
   });
 });
-

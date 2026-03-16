@@ -57,8 +57,11 @@ export function createAgentRegistry(agents: AgentDescriptor[], defaultAgentId?: 
   }
 
   function getDefaultAgentId(): string | null {
-    if (normalizedDefaultAgentId && getAgent(normalizedDefaultAgentId)) {
-      return normalizedDefaultAgentId;
+    if (normalizedDefaultAgentId) {
+      const defaultAgent = getAgent(normalizedDefaultAgentId);
+      if (defaultAgent && defaultAgent.enabled !== false) {
+        return normalizedDefaultAgentId;
+      }
     }
     return listEnabledAgents()[0]?.agentId ?? null;
   }
