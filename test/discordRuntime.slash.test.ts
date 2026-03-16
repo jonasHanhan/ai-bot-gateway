@@ -270,4 +270,33 @@ describe("discord runtime slash commands", () => {
       }
     ]);
   });
+
+  test("treats plain text as a prompt instead of an unknown command", async () => {
+    const enqueued: Array<{ repoChannelId: string; promptText: string }> = [];
+    const { runtime, calls } = createRuntime({
+      buildTurnInputFromMessage: async (_message: unknown, text: string) => [{ type: "text", text }],
+      enqueuePrompt: (repoChannelId: string, job: { inputItems: Array<{ text: string }> }) => {
+        enqueued.push({ repoChannelId, promptText: job.inputItems[0]?.text ?? "" });
+      }
+    });
+
+    await runtime.handleMessage({
+      author: { id: "user-1", bot: false },
+      content: "咋了",
+      channelId: "channel-1",
+      channel: {
+        id: "channel-1",
+        name: "repo-one",
+        type: ChannelType.GuildText
+      }
+    });
+
+    expect(calls).toEqual([]);
+    expect(enqueued).toEqual([
+      {
+        repoChannelId: "channel-1",
+        promptText: "咋了"
+      }
+    ]);
+  });
 });

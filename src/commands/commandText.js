@@ -4,7 +4,7 @@ export function normalizeRecognizedCommandText(text, commandNames) {
     return "";
   }
   if (!normalized.startsWith("!")) {
-    return normalized;
+    return "";
   }
 
   return isRecognizedCommandText(normalized, commandNames) ? normalized : "";
