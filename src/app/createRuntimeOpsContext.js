@@ -12,7 +12,7 @@ export function createRuntimeOpsContext(params) {
     safeReply,
     safeSendToChannel,
     fetchChannelByRouteId,
-    refs,
+    runtimeContainer,
     runtimeEnv
   } = params;
   const { heartbeatPath, restartRequestPath, restartAckPath, restartNoticePath, heartbeatIntervalMs, exitOnRestartAck } =
@@ -35,6 +35,6 @@ export function createRuntimeOpsContext(params) {
     safeSendToChannel,
     fetchChannelByRouteId,
     truncateStatusText,
-    shutdown: (...args) => refs.shutdown?.(...args)
+    shutdown: (...args) => runtimeContainer.getRef("shutdown")?.(...args)
   });
 }

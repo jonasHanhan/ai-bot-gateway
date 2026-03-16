@@ -1,4 +1,5 @@
 import process from "node:process";
+import { runCapabilitiesCommand } from "./commands/capabilities.js";
 import { runConfigValidateCommand } from "./commands/config-validate.js";
 import { runDoctorCommand } from "./commands/doctor.js";
 import { runLogsCommand } from "./commands/logs.js";
@@ -14,6 +15,7 @@ const commands: Record<string, CliCommand["run"]> = {
   stop: runStopCommand,
   reload: runReloadCommand,
   restart: runReloadCommand,
+  capabilities: runCapabilitiesCommand,
   "config-validate": runConfigValidateCommand,
   doctor: runDoctorCommand
 };
@@ -30,6 +32,7 @@ function printUsage(): void {
       "  stop              Stop launchd service (bootout)",
       "  reload [reason]   Write host-managed restart request signal file",
       "  restart [reason]  Alias for reload",
+      "  capabilities      Show platform + agent capability matrix (use --compact for concise rows)",
       "  config-validate   Validate channel/env config",
       "  doctor            Run operational diagnostics"
     ].join("\n")

@@ -1,4 +1,5 @@
 import { makeFeishuRouteId } from "./ids.js";
+import { resolveSetupAgentAndModel } from "../agents/setupResolution.js";
 
 export function resolveFeishuContext(message, options) {
   const { channelSetups, config, generalChat, unboundChat } = options;
@@ -9,10 +10,23 @@ export function resolveFeishuContext(message, options) {
 
   const setup = channelSetups[routeId];
   if (setup) {
+    const resolvedRepo = resolveSetupAgentAndModel(setup, config);
+    const normalizedSetupAgentId = String(setup?.agentId ?? "").trim();
+    const shouldAttachResolvedModel =
+      typeof resolvedRepo.resolvedModel === "string" &&
+      resolvedRepo.resolvedModel.length > 0 &&
+      resolvedRepo.resolvedModel !== String(setup?.model ?? "").trim();
+    const shouldAttachResolvedAgent =
+      !normalizedSetupAgentId &&
+      typeof resolvedRepo.resolvedAgentId === "string" &&
+      resolvedRepo.resolvedAgentId.length > 0;
+
     return {
       repoChannelId: routeId,
       setup: {
         ...setup,
+        ...(shouldAttachResolvedModel ? { resolvedModel: resolvedRepo.resolvedModel } : {}),
+        ...(shouldAttachResolvedAgent ? { resolvedAgentId: resolvedRepo.resolvedAgentId } : {}),
         bindingKind: "repo",
         mode: "repo",
         sandboxMode: config.sandboxMode,
@@ -22,11 +36,15 @@ export function resolveFeishuContext(message, options) {
   }
 
   if (isFeishuGeneralChat(message, generalChat)) {
+    const resolvedGeneral = resolveSetupAgentAndModel({}, config);
     return {
       repoChannelId: routeId,
       setup: {
         cwd: generalChat.cwd,
-        model: config.defaultModel,
+        resolvedModel: resolvedGeneral.resolvedModel ?? config.defaultModel,
+        ...(typeof resolvedGeneral.resolvedAgentId === "string" && resolvedGeneral.resolvedAgentId.length > 0
+          ? { resolvedAgentId: resolvedGeneral.resolvedAgentId }
+          : {}),
         bindingKind: "general",
         mode: "general",
         sandboxMode: "read-only",
@@ -39,11 +57,15 @@ export function resolveFeishuContext(message, options) {
     return null;
   }
 
+  const resolvedUnbound = resolveSetupAgentAndModel({}, config);
   return {
     repoChannelId: routeId,
     setup: {
       cwd: unboundChat?.cwd,
-      model: config.defaultModel,
+      resolvedModel: resolvedUnbound.resolvedModel ?? config.defaultModel,
+      ...(typeof resolvedUnbound.resolvedAgentId === "string" && resolvedUnbound.resolvedAgentId.length > 0
+        ? { resolvedAgentId: resolvedUnbound.resolvedAgentId }
+        : {}),
       bindingKind: "unbound-open",
       mode: "general",
       sandboxMode: "read-only",

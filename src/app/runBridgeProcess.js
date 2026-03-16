@@ -6,6 +6,12 @@ import { createRuntimeOpsContext } from "./createRuntimeOpsContext.js";
 import { attachBuiltRuntimes } from "./attachBuiltRuntimes.js";
 import { registerRuntimeErrorGuards } from "./runtimeErrorGuards.js";
 
+function logRuntimeSnapshot(runtimeContainer, event) {
+  console.info(
+    `[runtime] event=${event} phase=${runtimeContainer.getPhase()} snapshot=${JSON.stringify(runtimeContainer.snapshot())}`
+  );
+}
+
 export async function runBridgeProcess(context) {
   const {
     fs,
@@ -22,24 +28,16 @@ export async function runBridgeProcess(context) {
     activeTurns,
     pendingApprovals,
     processStartedAt,
-    refs,
+    runtimeContainer,
     runtimeAdapters,
     turnRecoveryStore,
     createApprovalToken
   } = context;
   const { generalChannelCwd } = runtimeEnv;
 
-  wireBridgeListeners({
-    codex,
-    discord,
-    handleNotification: runtimeAdapters.handleNotification,
-    handleServerRequest: runtimeAdapters.handleServerRequest,
-    handleChannelCreate: runtimeAdapters.handleChannelCreate,
-    handleMessage: runtimeAdapters.handleMessage,
-    handleInteraction: runtimeAdapters.handleInteraction
-  });
-
-  refs.runtimeOps = createRuntimeOpsContext({
+  runtimeContainer.setRef(
+    "runtimeOps",
+    createRuntimeOpsContext({
     fs,
     path,
     debugLog,
@@ -49,9 +47,10 @@ export async function runBridgeProcess(context) {
     safeReply,
     safeSendToChannel,
     fetchChannelByRouteId,
-    refs,
+      runtimeContainer,
     runtimeEnv
-  });
+    })
+  );
 
   const { backendRuntime, platformRegistry } = attachBuiltRuntimes({
     context,
@@ -64,18 +63,47 @@ export async function runBridgeProcess(context) {
     debugLog,
     turnRecoveryStore,
     createApprovalToken,
-    refs
+    runtimeContainer
+  });
+  runtimeContainer.assertInitialized([
+    "turnRunner",
+    "runtimeOps",
+    "notificationRuntime",
+    "serverRequestRuntime",
+    "discordRuntime",
+    "platformRegistry",
+    "backendRuntime",
+    "feishuRuntime"
+  ]);
+  runtimeContainer.transitionTo(runtimeContainer.RuntimePhase.RUNTIMES_ATTACHED);
+  logRuntimeSnapshot(runtimeContainer, "runtimes_attached");
+
+  wireBridgeListeners({
+    codex,
+    discord,
+    handleNotification: runtimeAdapters.handleNotification,
+    handleServerRequest: runtimeAdapters.handleServerRequest,
+    handleChannelCreate: runtimeAdapters.handleChannelCreate,
+    handleMessage: runtimeAdapters.handleMessage,
+    handleInteraction: runtimeAdapters.handleInteraction
   });
 
-  refs.shutdown = createShutdownHandler({
+  const shutdownImpl = createShutdownHandler({
     codex,
     discord,
     stopBackendRuntime: () => backendRuntime?.stop?.(),
     stopPlatformRuntimes: () => platformRegistry?.stop?.(),
-    stopHeartbeatLoop: () => refs.runtimeOps?.stopHeartbeatLoop()
+    stopHeartbeatLoop: () => runtimeContainer.requireRef("runtimeOps").stopHeartbeatLoop()
+  });
+  runtimeContainer.setRef("shutdown", async (exitCode) => {
+    if (runtimeContainer.getPhase() !== runtimeContainer.RuntimePhase.SHUTTING_DOWN) {
+      runtimeContainer.transitionTo(runtimeContainer.RuntimePhase.SHUTTING_DOWN);
+      logRuntimeSnapshot(runtimeContainer, "shutting_down");
+    }
+    await shutdownImpl(exitCode);
   });
   registerRuntimeErrorGuards({
-    shutdown: refs.shutdown
+    shutdown: runtimeContainer.requireRef("shutdown")
   });
   await startBridgeRuntime({
     codex,
@@ -91,6 +119,8 @@ export async function runBridgeProcess(context) {
     getMappedChannelCount: () => Object.keys(getChannelSetups()).length,
     startHeartbeatLoop: runtimeAdapters.startHeartbeatLoop
   });
+  runtimeContainer.transitionTo(runtimeContainer.RuntimePhase.READY);
+  logRuntimeSnapshot(runtimeContainer, "ready");
 
-  registerShutdownSignals(refs.shutdown);
+  registerShutdownSignals(runtimeContainer.requireRef("shutdown"));
 }

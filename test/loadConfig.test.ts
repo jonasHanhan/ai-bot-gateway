@@ -73,11 +73,56 @@ describe("loadConfig", () => {
     expect(config.autoDiscoverProjects).toBe(false);
   });
 
+  test("parses optional defaultAgent, agents, and per-channel agentId", async () => {
+    const configPath = writeJsonTempFile({
+      channels: {
+        chanA: { cwd: "./repo-a", agentId: "codex" },
+        chanB: { cwd: "./repo-b", agent: "claude", model: "gpt-alt" }
+      },
+      defaultAgent: "codex",
+      agents: {
+        codex: {
+          model: "gpt-5.3-codex",
+          enabled: true,
+          capabilities: {
+            supportsImageInput: true,
+            supportsInteractiveApprovals: false
+          }
+        },
+        claude: {
+          model: "claude-3.7-sonnet",
+          enabled: false
+        }
+      }
+    });
+
+    const config = await loadConfig(configPath);
+    expect(config.defaultAgent).toBe("codex");
+    expect(config.channels).toEqual({
+      chanA: { cwd: path.resolve("./repo-a"), agentId: "codex" },
+      chanB: { cwd: path.resolve("./repo-b"), agentId: "claude", model: "gpt-alt" }
+    });
+    expect(config.agents).toEqual({
+      codex: {
+        model: "gpt-5.3-codex",
+        enabled: true,
+        capabilities: {
+          supportsImageInput: true,
+          supportsInteractiveApprovals: false
+        }
+      },
+      claude: {
+        model: "claude-3.7-sonnet",
+        enabled: false
+      }
+    });
+  });
+
   test("throws for invalid channel mapping", async () => {
     const configPath = writeJsonTempFile({
       channels: { bad: { nope: true } }
     });
-    await expect(loadConfig(configPath)).rejects.toThrow("must map to a cwd string or { cwd, model? } object");
+    await expect(loadConfig(configPath)).rejects.toThrow("must map to a cwd string or { cwd, model?, agentId? } object");
   });
 
   test("uses env DISCORD_ALLOWED_USER_IDS when set", async () => {

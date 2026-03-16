@@ -1,3 +1,5 @@
+import { getActiveAgentId, setupSupportsImageInput } from "../agents/setupResolution.js";
+
 export function createCommandRouter(deps) {
   const {
     ChannelType,
@@ -46,6 +48,15 @@ export function createCommandRouter(deps) {
         await safeReply(message, "Usage: `!ask <prompt>`");
         return;
       }
+      if (imageAttachments.length > 0 && !setupSupportsImageInput(context.setup, config)) {
+        const activeAgent = getActiveAgentId(context.setup, config);
+        const agentLabel = activeAgent ? `\`${activeAgent}\`` : "current agent";
+        await safeReply(
+          message,
+          `Image input is not supported for ${agentLabel}. Switch agent with \`!setagent <agent-id>\` or send text only.`
+        );
+        return;
+      }
       const inputItems = await buildTurnInputFromMessage(message, rest, imageAttachments, context.setup);
       if (inputItems.length === 0) {
         await safeReply(message, "No usable text or image attachment found for `!ask`.");
@@ -77,7 +88,7 @@ export function createCommandRouter(deps) {
         message,
         [
           `cwd: \`${context.setup.cwd}\``,
-          `model: \`${context.setup.model ?? config.defaultModel}\`${context.setup.model ? " (channel override)" : " (default)"}`,
+          `model: \`${context.setup.resolvedModel ?? context.setup.model ?? config.defaultModel}\`${context.setup.model ? " (channel override)" : " (default)"}`,
           `mode: ${modeLabel}`,
           `approval policy: \`${config.approvalPolicy}\``,
           `sandbox mode: \`${sandboxMode}\``,
@@ -129,7 +140,7 @@ export function createCommandRouter(deps) {
         `channel config: \`${configPath}\``,
         `channel mode: \`${modeLabel}\``,
         `channel cwd: \`${context.setup.cwd}\``,
-        `channel model: \`${context.setup.model ?? config.defaultModel}\`${context.setup.model ? " (channel override)" : " (default)"}`,
+        `channel model: \`${context.setup.resolvedModel ?? context.setup.model ?? config.defaultModel}\`${context.setup.model ? " (channel override)" : " (default)"}`,
         `repo channel: \`${context.repoChannelId}\``,
         `approval policy: \`${config.approvalPolicy}\``,
         `sandbox mode: \`${sandboxMode}\``,
@@ -198,6 +209,115 @@ export function createCommandRouter(deps) {
       setChannelSetups(nextSetups);
 
       await safeReply(message, `Cleared this channel model override. It will now use the default model \`${config.defaultModel}\`.`);
+      return;
+    }
+
+    if (command === "!setagent") {
+      if (context.setup.mode === "general") {
+        await safeReply(message, "`!setagent` is only available in repo channels.");
+        return;
+      }
+      const nextAgentId = String(rest ?? "").trim();
+      if (!nextAgentId) {
+        await safeReply(message, "Usage: `!setagent <agent-id>`");
+        return;
+      }
+
+      const configuredAgentIds = Object.keys(config.agents ?? {});
+      if (configuredAgentIds.length === 0) {
+        await safeReply(
+          message,
+          "No agents configured in `channels.json` (`defaultAgent` / `agents`). Configure agents first, then use `!setagent`."
+        );
+        return;
+      }
+      if (!configuredAgentIds.includes(nextAgentId)) {
+        await safeReply(
+          message,
+          `Unknown agent \`${nextAgentId}\`. Available: ${configuredAgentIds.map((agentId) => `\`${agentId}\``).join(", ")}`
+        );
+        return;
+      }
+
+      const existingSetup = getChannelSetups()[message.channelId];
+      if (!existingSetup?.cwd) {
+        await safeReply(message, "This channel is not bound to a repo path.");
+        return;
+      }
+
+      const nextSetup = {
+        ...existingSetup,
+        agentId: nextAgentId
+      };
+      await persistChannelSetupToConfig(fs, path, configPath, message.channelId, nextSetup);
+
+      const nextSetups = { ...getChannelSetups() };
+      nextSetups[message.channelId] = nextSetup;
+      setChannelSetups(nextSetups);
+
+      await safeReply(message, `Set this channel agent override to \`${nextAgentId}\`.`);
+      return;
+    }
+
+    if (command === "!clearagent") {
+      if (context.setup.mode === "general") {
+        await safeReply(message, "`!clearagent` is only available in repo channels.");
+        return;
+      }
+
+      const existingSetup = getChannelSetups()[message.channelId];
+      if (!existingSetup?.cwd) {
+        await safeReply(message, "This channel is not bound to a repo path.");
+        return;
+      }
+      if (typeof existingSetup.agentId !== "string") {
+        await safeReply(message, "This channel already uses the default agent.");
+        return;
+      }
+
+      const nextSetup = {
+        ...existingSetup
+      };
+      delete nextSetup.agentId;
+      await persistChannelSetupToConfig(fs, path, configPath, message.channelId, nextSetup);
+
+      const nextSetups = { ...getChannelSetups() };
+      nextSetups[message.channelId] = nextSetup;
+      setChannelSetups(nextSetups);
+
+      await safeReply(message, "Cleared this channel agent override. It will now use the default agent.");
+      return;
+    }
+
+    if (command === "!agents") {
+      const configuredAgents = config.agents && typeof config.agents === "object" ? config.agents : {};
+      const agentIds = Object.keys(configuredAgents);
+      const currentAgentId = getActiveAgentId(context.setup, config);
+      if (agentIds.length === 0) {
+        await safeReply(
+          message,
+          [
+            "No agents configured in `channels.json` (`defaultAgent` / `agents`).",
+            `Current model: \`${context.setup.resolvedModel ?? context.setup.model ?? config.defaultModel}\``
+          ].join("\n")
+        );
+        return;
+      }
+
+      const lines = [
+        `default agent: ${config.defaultAgent ? `\`${config.defaultAgent}\`` : "(none)"}`,
+        `current agent: ${currentAgentId ? `\`${currentAgentId}\`` : "(none)"}`,
+        "available agents:"
+      ];
+      for (const agentId of agentIds) {
+        const agent = configuredAgents[agentId] ?? {};
+        const model = typeof agent.model === "string" && agent.model.trim().length > 0 ? agent.model.trim() : "(inherits defaultModel)";
+        const enabled = agent.enabled === false ? "disabled" : "enabled";
+        const supportsImageInput = formatImageCapabilityLabel(agent);
+        const marker = currentAgentId === agentId ? " <- current" : config.defaultAgent === agentId ? " <- default" : "";
+        lines.push(`- \`${agentId}\` | ${enabled} | ${supportsImageInput} | model: \`${model}\`${marker}`);
+      }
+      await safeReply(message, lines.join("\n"));
       return;
     }
 
@@ -290,8 +410,11 @@ export function createCommandRouter(deps) {
       lines.push(`\`${prefix}unbind\` remove repo binding from this channel`);
       lines.push(`\`${prefix}setmodel <model>\` set an explicit model override for this channel`);
       lines.push(`\`${prefix}clearmodel\` remove this channel's explicit model override and use the default model`);
+      lines.push(`\`${prefix}setagent <agent-id>\` set an explicit agent override for this channel`);
+      lines.push(`\`${prefix}clearagent\` remove this channel's explicit agent override and use the default agent`);
     }
     lines.push(`\`${prefix}setpath <abs-path>\` bind this chat to an existing repo path`);
+    lines.push(`\`${prefix}agents\` show configured agents and current selection`);
     lines.push(`\`${prefix}ask <prompt>\` send prompt in this repo channel`);
     lines.push(`\`${prefix}status\` show queue/thread status for this channel`);
     lines.push(`\`${prefix}new\` reset Codex thread binding for this channel`);
@@ -431,13 +554,12 @@ export function createCommandRouter(deps) {
       return;
     }
 
+    const explicitModel = pickExplicitModelOverride(existingSetup, config.channels?.[routeId]);
+
     const nextSetup = {
       cwd: targetPath,
-      model:
-        existingSetup?.model ??
-        config.channels?.[routeId]?.model ??
-        context?.setup?.model ??
-        config.defaultModel
+      ...(typeof existingSetup?.agentId === "string" ? { agentId: existingSetup.agentId } : {}),
+      ...(typeof explicitModel === "string" ? { model: explicitModel } : {})
     };
 
     await persistChannelSetupToConfig(fs, path, configPath, routeId, nextSetup);
@@ -520,6 +642,7 @@ export function createCommandRouter(deps) {
     }
 
     await bindChannelToPath(message.channel, message.channelId, repoPath, {
+      ...(typeof existingSetup?.agentId === "string" ? { agentId: existingSetup.agentId } : {}),
       ...(typeof existingSetup?.model === "string" ? { model: existingSetup.model } : {})
     });
 
@@ -667,6 +790,7 @@ export function createCommandRouter(deps) {
   async function bindChannelToPath(channel, channelId, repoPath, options = {}) {
     const nextSetup = {
       cwd: repoPath,
+      ...(typeof options.agentId === "string" ? { agentId: options.agentId } : {}),
       ...(typeof options.model === "string" ? { model: options.model } : {})
     };
 
@@ -721,7 +845,9 @@ const DISCORD_ONLY_COMMANDS = new Set([
   "rebind",
   "unbind",
   "setmodel",
-  "clearmodel"
+  "clearmodel",
+  "setagent",
+  "clearagent"
 ]);
 
 function upsertTopicTag(topic, prefix, value) {
@@ -738,6 +864,28 @@ function upsertTopicTag(topic, prefix, value) {
 function removeTopicTag(topic, prefix) {
   const lines = typeof topic === "string" && topic.trim() ? topic.split(/\n+/).map((line) => line.trim()) : [];
   return lines.filter((line) => !line.startsWith(prefix)).join("\n").trim();
+}
+
+function formatImageCapabilityLabel(agent) {
+  const capabilities = agent?.capabilities;
+  const hasDeclaredCapability =
+    capabilities &&
+    typeof capabilities === "object" &&
+    Object.prototype.hasOwnProperty.call(capabilities, "supportsImageInput");
+  if (!hasDeclaredCapability) {
+    return "image✅(default)";
+  }
+  return capabilities.supportsImageInput === true ? "image✅" : "image❌";
+}
+
+function pickExplicitModelOverride(...candidates) {
+  for (const candidate of candidates) {
+    const model = typeof candidate?.model === "string" ? candidate.model.trim() : "";
+    if (model.length > 0) {
+      return model;
+    }
+  }
+  return null;
 }
 
 function parseMakeChannelArgs(rest, pathModule, options = {}) {
@@ -826,6 +974,7 @@ async function persistChannelSetupToConfig(fsModule, pathModule, targetConfigPat
 
   channels[channelId] = {
     cwd: setup.cwd,
+    ...(typeof setup.agentId === "string" ? { agentId: setup.agentId } : {}),
     ...(typeof setup.model === "string" ? { model: setup.model } : {})
   };
 

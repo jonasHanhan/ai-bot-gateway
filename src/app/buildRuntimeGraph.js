@@ -9,6 +9,7 @@ import {
 import { createAttachmentInputBuilder } from "../attachments/inputBuilder.js";
 import { createChannelMessaging } from "./channelMessaging.js";
 import { createRuntimeAdapters } from "./runtimeAdapters.js";
+import { createRuntimeContainer } from "./runtimeContainer.js";
 import { isThreadNotFoundError } from "../codex/eventUtils.js";
 import { createSandboxPolicyResolver } from "../codex/sandboxPolicy.js";
 import { createTurnRunner } from "../codex/turnRunner.js";
@@ -41,23 +42,14 @@ export async function buildRuntimeGraph(deps) {
   const codex = new CodexRpcClient({
     codexBin
   });
-  const refs = {
-    runtimeOps: null,
-    discordRuntime: null,
-    backendRuntime: null,
-    feishuRuntime: null,
-    platformRegistry: null,
-    notificationRuntime: null,
-    serverRequestRuntime: null,
-    shutdown: null,
-    turnRunner: null
-  };
+  const runtimeContainer = createRuntimeContainer();
   const fetchChannelByRouteId = async (routeId) => {
-    if (refs.platformRegistry?.fetchChannelByRouteId) {
-      return await refs.platformRegistry.fetchChannelByRouteId(routeId);
+    const platformRegistry = runtimeContainer.getRef("platformRegistry");
+    if (platformRegistry?.fetchChannelByRouteId) {
+      return await platformRegistry.fetchChannelByRouteId(routeId);
     }
     if (isFeishuRouteId(routeId)) {
-      return (await refs.feishuRuntime?.fetchChannelByRouteId?.(routeId)) ?? null;
+      return (await runtimeContainer.getRef("feishuRuntime")?.fetchChannelByRouteId?.(routeId)) ?? null;
     }
     return await discord.channels.fetch(routeId).catch(() => null);
   };
@@ -97,12 +89,7 @@ export async function buildRuntimeGraph(deps) {
   });
   const runtimeAdapters = createRuntimeAdapters({
     attachmentInputBuilder,
-    getTurnRunner: () => refs.turnRunner,
-    getNotificationRuntime: () => refs.notificationRuntime,
-    getServerRequestRuntime: () => refs.serverRequestRuntime,
-    getDiscordRuntime: () => refs.discordRuntime,
-    getPlatformRegistry: () => refs.platformRegistry,
-    getRuntimeOps: () => refs.runtimeOps,
+    runtimeContainer,
     maybeSendAttachmentsForItemFromService,
     maybeSendInferredAttachmentsFromTextFromService,
     sendChunkedToChannelFromRenderer,
@@ -125,7 +112,9 @@ export async function buildRuntimeGraph(deps) {
     }
   });
 
-  refs.turnRunner = createTurnRunner({
+  runtimeContainer.setRef(
+    "turnRunner",
+    createTurnRunner({
     queues,
     activeTurns,
     state,
@@ -145,8 +134,9 @@ export async function buildRuntimeGraph(deps) {
         errorMessage: tracker?.failureMessage ?? null
       });
     },
-    onActiveTurnsChanged: () => refs.runtimeOps?.writeHeartbeatFile()
-  });
+      onActiveTurnsChanged: () => runtimeContainer.getRef("runtimeOps")?.writeHeartbeatFile()
+    })
+  );
 
   return {
     fs,
@@ -159,7 +149,7 @@ export async function buildRuntimeGraph(deps) {
     activeTurns,
     pendingApprovals,
     processStartedAt,
-    refs,
+    runtimeContainer,
     runtimeAdapters,
     turnRecoveryStore,
     createApprovalToken

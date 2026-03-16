@@ -33,7 +33,7 @@ src/codex/notificationMapper.js Normalized notification boundaries
 src/codex/approvalPayloads.js Approval request/response mapping
 src/attachments/service.js    Attachment candidate extraction + upload policy
 src/render/messageRenderer.js Message render plan, redaction, chunking
-src/cli/**                    Operator CLI (`status`, `doctor`, `start`, `stop`, `reload`, `logs`)
+src/cli/**                    Operator CLI (`status`, `capabilities`, `doctor`, `start`, `stop`, `reload`, `logs`)
 src/app/main.ts               TS bootstrap entry used by `start:ts`
 src/types/**                  TS boundary contracts for cutover
 ```
@@ -150,6 +150,13 @@ sequenceDiagram
 - The platform registry is the boundary between core bridge logic and chat integrations.
 - Discord and Feishu declare capabilities such as attachments, buttons, repo bootstrap, auto-discovery, and webhook ingress.
 - Shared code asks for capabilities instead of branching on platform names whenever possible.
+
+### Agent Model
+
+- Agent definitions are loaded from `channels.json > agents`.
+- Each route resolves `agentId + model` in this order: route override -> `defaultAgent` -> runtime fallback.
+- Agent capabilities are checked through a shared registry instead of per-platform hardcoding.
+- Current capability in active use: `supportsImageInput`.
 
 ## Quick Start
 
@@ -351,6 +358,7 @@ Use `.env.example` as the exhaustive reference. The most important variables are
 - approval/sandbox defaults
 - turning auto-discovery on or off
 - persistent manual route rebindings made with `setpath`
+- default agent and per-route agent overrides
 
 Example:
 
@@ -375,6 +383,49 @@ Example:
   }
 }
 ```
+
+Multi-agent example:
+
+```json
+{
+  "defaultModel": "gpt-5.3-codex",
+  "defaultAgent": "codex-default",
+  "agents": {
+    "codex-default": {
+      "model": "gpt-5.3-codex",
+      "enabled": true,
+      "capabilities": {
+        "supportsImageInput": true
+      }
+    },
+    "codex-lite": {
+      "model": "gpt-5.3-codex",
+      "enabled": true,
+      "capabilities": {
+        "supportsImageInput": false
+      }
+    }
+  },
+  "channels": {
+    "123456789012345678": {
+      "cwd": "/absolute/path/to/discord/repo",
+      "agentId": "codex-default"
+    },
+    "feishu:oc_xxxxxxxxxxxxxxxxx": {
+      "cwd": "/absolute/path/to/feishu/repo",
+      "agentId": "codex-lite"
+    }
+  }
+}
+```
+
+Agent routing notes:
+
+- Channel `agentId` overrides `defaultAgent`.
+- If a route has no explicit `agentId`, it uses `defaultAgent`.
+- If `defaultAgent` is missing or invalid, runtime falls back to the first enabled agent.
+- Use `!agents`, `!setagent <agentId>`, `!clearagent` in Discord repo channels to inspect or adjust route-level agent selection.
+- `supportsImageInput` is agent-scoped and evaluated at runtime with compatibility fallback.
 
 Route key rules:
 
@@ -627,12 +678,14 @@ Before enabling, set at least:
 ## Operator CLI
 
 - `bun run cli status` shows runtime paths, binding count, and heartbeat status.
+- `bun run cli capabilities` shows platform + agent capability matrix (from env + `channels.json`).
+  - Add `--compact` to include concise human-readable rows in output.
 - `bun run cli start` bootstraps/enables/kickstarts the launchd service (`com.codex.discord.bridge` by default).
 - `bun run cli stop` stops the launchd service via `bootout`.
 - `bun run cli logs` tails active bridge stdout/stderr logs (same paths used by launchd when configured).
   - Supports `--clear` and `--since <10m|2h|iso>` for faster incident triage.
 - `bun run cli config-validate` validates channel/env config and reports effective defaults.
-- `bun run cli doctor` runs operational diagnostics (token/writable paths/attachment roots).
+- `bun run cli doctor` runs operational diagnostics (token/writable paths/attachment roots/default agent validity/platform adapter integrity).
 - `bun run cli reload [reason]` writes a restart intent file for host-managed supervisors.
 - `bun run cli restart [reason]` alias for `reload`.
 - `scripts/restart-supervisor.sh -- bun run start` runs a host-side process loop that watches `data/restart-request.json` and restarts the bridge externally (with throttle/backoff).

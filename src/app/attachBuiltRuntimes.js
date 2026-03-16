@@ -14,7 +14,7 @@ export function attachBuiltRuntimes(params) {
     debugLog,
     turnRecoveryStore,
     createApprovalToken,
-    refs
+    runtimeContainer
   } = params;
   const {
     path,
@@ -26,43 +26,10 @@ export function attachBuiltRuntimes(params) {
     state,
     activeTurns,
     pendingApprovals,
-    processStartedAt
+    processStartedAt,
+    discordToken,
+    fetchChannelByRouteId
   } = context;
-  const {
-    approvalButtonPrefix,
-    projectsCategoryName,
-    managedChannelTopicPrefix,
-    managedThreadTopicPrefix,
-    repoRootPath,
-    codexBin,
-    codexHomeEnv,
-    statePath,
-    configPath,
-    renderVerbosity,
-    disableStreamingOutput,
-    backendHttpEnabled,
-    backendHttpHost,
-    backendHttpPort,
-    feishuEnabled,
-    feishuAppId,
-    feishuAppSecret,
-    feishuVerificationToken,
-    feishuTransport,
-    feishuPort,
-    feishuHost,
-    feishuWebhookPath,
-    imageCacheDir,
-    feishuGeneralChatId,
-    feishuGeneralCwd,
-    feishuUnboundChatMode,
-    feishuUnboundChatCwd,
-    feishuRequireMentionInGroup,
-    feishuSegmentedStreaming,
-    feishuStreamMinChars,
-    generalChannelId,
-    generalChannelName,
-    generalChannelCwd
-  } = runtimeEnv;
 
   const {
     bootstrapChannelMappings,
@@ -74,72 +41,50 @@ export function attachBuiltRuntimes(params) {
     serverRequestRuntime,
     discordRuntime
   } = buildBridgeRuntimes({
-    ChannelType,
-    MessageFlags,
-    path,
-    fs,
-    execFileAsync,
-    discord,
-    discordToken: context.discordToken,
-    codex,
-    fetchChannelByRouteId: context.fetchChannelByRouteId,
-    processStartedAt,
-    config,
-    state,
-    activeTurns,
-    pendingApprovals,
-    approvalButtonPrefix,
-    projectsCategoryName,
-    managedChannelTopicPrefix,
-    managedThreadTopicPrefix,
-    repoRootPath,
-    codexBin,
-    codexHomeEnv,
-    statePath,
-    configPath,
-    renderVerbosity,
-    disableStreamingOutput,
-    backendHttpEnabled,
-    backendHttpHost,
-    backendHttpPort,
-    waitForDiscordReady,
-    feishuEnabled,
-    feishuAppId,
-    feishuAppSecret,
-    feishuVerificationToken,
-    feishuTransport,
-    feishuPort,
-    feishuHost,
-    feishuWebhookPath,
-    imageCacheDir,
-    feishuGeneralChatId,
-    feishuGeneralCwd,
-    feishuUnboundChatMode,
-    feishuUnboundChatCwd,
-    feishuRequireMentionInGroup,
-    feishuSegmentedStreaming,
-    feishuStreamMinChars,
-    generalChannelId,
-    generalChannelName,
-    generalChannelCwd,
-    isDiscordMissingPermissionsError,
-    getChannelSetups,
-    setChannelSetups,
-    runtimeAdapters,
-    safeReply,
-    safeSendToChannel,
-    debugLog,
-    turnRecoveryStore,
-    createApprovalToken,
-    sendChunkedToChannel: runtimeAdapters.sendChunkedToChannel
+    platformTypes: {
+      ChannelType,
+      MessageFlags
+    },
+    runtimeContext: {
+      path,
+      fs,
+      execFileAsync,
+      discord,
+      discordToken,
+      fetchChannelByRouteId,
+      processStartedAt,
+      codex,
+      config,
+      state,
+      activeTurns,
+      pendingApprovals
+    },
+    runtimeEnv,
+    channelSetupStore: {
+      getChannelSetups,
+      setChannelSetups
+    },
+    runtimeServices: {
+      runtimeAdapters,
+      safeReply,
+      safeSendToChannel,
+      debugLog,
+      turnRecoveryStore,
+      createApprovalToken,
+      sendChunkedToChannel: runtimeAdapters.sendChunkedToChannel
+    },
+    ioRuntime: {
+      waitForDiscordReady,
+      isDiscordMissingPermissionsError
+    }
   });
 
-  refs.notificationRuntime = notificationRuntime;
-  refs.serverRequestRuntime = serverRequestRuntime;
-  refs.discordRuntime = discordRuntime;
-  refs.platformRegistry = platformRegistry;
-  refs.backendRuntime = backendRuntime;
-  refs.feishuRuntime = feishuRuntime;
+  runtimeContainer.setRef("notificationRuntime", notificationRuntime);
+  runtimeContainer.setRef("serverRequestRuntime", serverRequestRuntime);
+  runtimeContainer.setRef("discordRuntime", discordRuntime);
+  runtimeContainer.setRef("platformRegistry", platformRegistry);
+  runtimeContainer.setRef("backendRuntime", backendRuntime);
+  runtimeContainer.setRef("feishuRuntime", feishuRuntime);
 
   return { bootstrapChannelMappings, registerSlashCommands, backendRuntime, feishuRuntime, platformRegistry };
 }

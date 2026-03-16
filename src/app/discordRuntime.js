@@ -1,4 +1,5 @@
 import { normalizeRecognizedCommandText } from "../commands/commandText.js";
+import { getActiveAgentId, setupSupportsImageInput } from "../agents/setupResolution.js";
 
 export function createDiscordRuntime(deps) {
   const {
@@ -127,6 +128,16 @@ export function createDiscordRuntime(deps) {
 
     if (shouldHandleAsSelfRestartRequest(content)) {
       await requestSelfRestartFromDiscord(message, content);
+      return;
+    }
+
+    if (imageAttachments.length > 0 && !setupSupportsImageInput(context.setup, config)) {
+      const activeAgent = getActiveAgentId(context.setup, config);
+      const agentLabel = activeAgent ? `\`${activeAgent}\`` : "current agent";
+      await safeReply(
+        message,
+        `Image input is not supported for ${agentLabel}. Switch agent with \`!setagent <agent-id>\` or send text only.`
+      );
       return;
     }
 
@@ -343,7 +354,10 @@ const DISCORD_MESSAGE_COMMANDS = new Set([
   "rebind",
   "unbind",
   "setmodel",
-  "clearmodel"
+  "clearmodel",
+  "setagent",
+  "clearagent",
+  "agents"
 ]);
 
 function normalizeIncomingContent(content, botUserId) {

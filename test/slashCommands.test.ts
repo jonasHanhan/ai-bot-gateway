@@ -27,6 +27,7 @@ describe("slash commands", () => {
       "restart",
       "interrupt",
       "where",
+      "agents",
       "setpath",
       "approve",
       "decline",
@@ -48,6 +49,7 @@ describe("slash commands", () => {
     expect(
       buildCommandTextFromInteraction({ commandName: "setpath", options: createOptions({ path: "/tmp/repo-one" }) })
     ).toBe("!setpath /tmp/repo-one");
+    expect(buildCommandTextFromInteraction({ commandName: "agents", options: createOptions() })).toBe("!agents");
     expect(buildCommandTextFromInteraction({ commandName: "initrepo", options: createOptions({ force: true }) })).toBe(
       "!initrepo force"
     );
@@ -82,8 +84,8 @@ describe("slash commands", () => {
     expect(summary).toEqual({
       scope: "guild",
       guildId: "guild-1",
-      count: 14
+      count: 15
     });
-    expect(calls).toEqual([{ target: "guild", count: 14 }]);
+    expect(calls).toEqual([{ target: "guild", count: 15 }]);
   });
 });
