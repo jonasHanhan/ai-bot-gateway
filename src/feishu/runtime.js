@@ -38,7 +38,6 @@ export function createFeishuRuntime(deps) {
     feishuUnboundChatMode,
     feishuUnboundChatCwd
   } = runtimeEnv;
-
   const seenEventIds = new Map();
   const sentMessages = new Map();
   const transport = normalizeFeishuTransport(feishuTransport);
@@ -74,15 +73,15 @@ export function createFeishuRuntime(deps) {
       return;
     }
 
-    if (!isValidVerificationToken(payload)) {
-      response.writeHead(403, { "content-type": "application/json" });
-      response.end(JSON.stringify({ code: 403, msg: "invalid token" }));
-      return;
-    }
-
     if (isUrlVerification(payload)) {
       response.writeHead(200, { "content-type": "application/json" });
       response.end(JSON.stringify({ challenge: payload.challenge }));
+      return;
+    }
+
+    if (!isValidVerificationToken(payload)) {
+      response.writeHead(403, { "content-type": "application/json" });
+      response.end(JSON.stringify({ code: 403, msg: "invalid token" }));
       return;
     }
 
