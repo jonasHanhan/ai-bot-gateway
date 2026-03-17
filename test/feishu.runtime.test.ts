@@ -1229,4 +1229,178 @@ describe("feishu runtime", () => {
     expect(sentBodies[0]?.content).not.toContain("[32m");
     expect(sentBodies[0]?.content).not.toContain("[31m");
   });
+
+  test("invites current app bot into target chat via /joinbot", async () => {
+    const invitedChats: Array<{ url: string; body: { id_list?: string[] } }> = [];
+    const replies: string[] = [];
+
+    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/tenant_access_token/internal")) {
+        return new Response(JSON.stringify({ code: 0, tenant_access_token: "tenant-token", expire: 7200 }), {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        });
+      }
+      if (url.includes("/open-apis/im/v1/chats/") && url.includes("/members?member_id_type=app_id")) {
+        invitedChats.push({
+          url,
+          body: JSON.parse(String(init?.body ?? "{}"))
+        });
+        return new Response(JSON.stringify({ code: 0, data: {} }), {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        });
+      }
+      if (url.includes("/open-apis/im/v1/messages/") && url.includes("/reply")) {
+        const body = JSON.parse(String(init?.body ?? "{}"));
+        const content = JSON.parse(String(body.content ?? "{}"));
+        replies.push(String(content.text ?? ""));
+        return new Response(JSON.stringify({ code: 0, data: { message_id: "om_joinbot_reply_1" } }), {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        });
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    };
+
+    const runtime = createFeishuRuntime({
+      config: {
+        defaultModel: "gpt-5.3-codex",
+        sandboxMode: "workspace-write",
+        allowedFeishuUserIds: []
+      },
+      runtimeEnv: {
+        feishuEnabled: true,
+        feishuAppId: "cli_test",
+        feishuAppSecret: "secret",
+        feishuVerificationToken: "",
+        feishuPort: 8788,
+        feishuHost: "127.0.0.1",
+        feishuWebhookPath: "/feishu/events",
+        feishuGeneralChatId: "",
+        feishuGeneralCwd: "/tmp/general",
+        feishuRequireMentionInGroup: false
+      },
+      getChannelSetups: () => ({}),
+      runManagedRouteCommand: async () => {},
+      getHelpText: () => "help text",
+      isCommandSupportedForPlatform: () => false,
+      handleCommand: async () => {},
+      runtimeAdapters: {
+        buildTurnInputFromMessage: async () => [],
+        enqueuePrompt: () => {}
+      },
+      safeReply: async (message: { reply: (text: string) => Promise<unknown> }, content: string) => await message.reply(content)
+    });
+
+    await runtime.handleEventPayload({
+      header: {
+        event_id: "evt-joinbot-1",
+        event_type: "im.message.receive_v1"
+      },
+      event: {
+        sender: {
+          sender_id: { open_id: "ou_joinbot_1" },
+          sender_type: "user"
+        },
+        message: {
+          message_id: "om_joinbot_1",
+          chat_id: "oc_source_1",
+          chat_type: "p2p",
+          message_type: "text",
+          content: JSON.stringify({ text: "/joinbot oc_target_1" }),
+          mentions: []
+        }
+      }
+    });
+
+    expect(invitedChats).toHaveLength(1);
+    expect(invitedChats[0]?.url).toContain("/open-apis/im/v1/chats/oc_target_1/members?member_id_type=app_id");
+    expect(invitedChats[0]?.body.id_list).toEqual(["cli_test"]);
+    expect(replies[0]).toContain("chat_id: `oc_target_1`");
+    expect(replies[0]).toContain("bot_app_id: `cli_test`");
+  });
+
+  test("parses route-id argument for /joinbot", async () => {
+    const invitedUrls: string[] = [];
+
+    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/tenant_access_token/internal")) {
+        return new Response(JSON.stringify({ code: 0, tenant_access_token: "tenant-token", expire: 7200 }), {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        });
+      }
+      if (url.includes("/open-apis/im/v1/chats/") && url.includes("/members?member_id_type=app_id")) {
+        invitedUrls.push(url);
+        return new Response(JSON.stringify({ code: 0, data: {} }), {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        });
+      }
+      if (url.includes("/open-apis/im/v1/messages/") && url.includes("/reply")) {
+        return new Response(JSON.stringify({ code: 0, data: { message_id: "om_joinbot_reply_2" } }), {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        });
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    };
+
+    const runtime = createFeishuRuntime({
+      config: {
+        defaultModel: "gpt-5.3-codex",
+        sandboxMode: "workspace-write",
+        allowedFeishuUserIds: []
+      },
+      runtimeEnv: {
+        feishuEnabled: true,
+        feishuAppId: "cli_test",
+        feishuAppSecret: "secret",
+        feishuVerificationToken: "",
+        feishuPort: 8788,
+        feishuHost: "127.0.0.1",
+        feishuWebhookPath: "/feishu/events",
+        feishuGeneralChatId: "",
+        feishuGeneralCwd: "/tmp/general",
+        feishuRequireMentionInGroup: false
+      },
+      getChannelSetups: () => ({}),
+      runManagedRouteCommand: async () => {},
+      getHelpText: () => "help text",
+      isCommandSupportedForPlatform: () => false,
+      handleCommand: async () => {},
+      runtimeAdapters: {
+        buildTurnInputFromMessage: async () => [],
+        enqueuePrompt: () => {}
+      },
+      safeReply: async (message: { reply: (text: string) => Promise<unknown> }, content: string) => await message.reply(content)
+    });
+
+    await runtime.handleEventPayload({
+      header: {
+        event_id: "evt-joinbot-2",
+        event_type: "im.message.receive_v1"
+      },
+      event: {
+        sender: {
+          sender_id: { open_id: "ou_joinbot_2" },
+          sender_type: "user"
+        },
+        message: {
+          message_id: "om_joinbot_2",
+          chat_id: "oc_source_2",
+          chat_type: "p2p",
+          message_type: "text",
+          content: JSON.stringify({ text: "/joinbot feishu:oc_target_2" }),
+          mentions: []
+        }
+      }
+    });
+
+    expect(invitedUrls).toHaveLength(1);
+    expect(invitedUrls[0]).toContain("/open-apis/im/v1/chats/oc_target_2/members?member_id_type=app_id");
+  });
 });

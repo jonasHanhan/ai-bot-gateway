@@ -184,6 +184,54 @@ export function createFeishuRuntime(deps) {
       return;
     }
 
+    if (normalizedCommand.startsWith("!joinbot") || normalizedCommand.startsWith("!addbot")) {
+      const chatIdArg = normalizedCommand.replace(/^!(?:joinbot|addbot)\b/i, "").trim();
+      const targetChatId = resolveTargetChatId(chatIdArg, message.chat_id);
+      if (!targetChatId) {
+        await safeReply(
+          inboundMessage,
+          [
+            "Usage: `/joinbot <chat_id|feishu:chat_id>`",
+            "Example: `/joinbot oc_xxxxxxxxx`"
+          ].join("\n")
+        );
+        return;
+      }
+
+      if (!feishuAppId) {
+        await safeReply(inboundMessage, "Missing `FEISHU_APP_ID`; cannot invite the current app bot.");
+        return;
+      }
+
+      try {
+        const inviteResult = await inviteCurrentAppBotToChat(targetChatId);
+        const lines = [
+          `Bot invite request sent for chat_id: \`${targetChatId}\``,
+          `bot_app_id: \`${feishuAppId}\``
+        ];
+        if (inviteResult.invalidIdList.length > 0) {
+          lines.push(`invalid_id_list: \`${inviteResult.invalidIdList.join(", ")}\``);
+        }
+        if (inviteResult.notExistedIdList.length > 0) {
+          lines.push(`not_existed_id_list: \`${inviteResult.notExistedIdList.join(", ")}\``);
+        }
+        if (inviteResult.pendingApprovalIdList.length > 0) {
+          lines.push(`pending_approval_id_list: \`${inviteResult.pendingApprovalIdList.join(", ")}\``);
+        }
+        lines.push("If membership did not change, confirm bot capability + chat member permissions in Feishu app settings.");
+        await safeReply(inboundMessage, lines.join("\n"));
+      } catch (error) {
+        await safeReply(
+          inboundMessage,
+          [
+            `Failed to invite current app bot into chat \`${targetChatId}\`.`,
+            `reason: ${error.message}`
+          ].join("\n")
+        );
+      }
+      return;
+    }
+
     if (normalizedCommand.startsWith("!setpath")) {
       const rest = normalizedCommand.replace(/^!setpath\b/i, "").trim();
       await handleSetPathCommand(inboundMessage, rest);
@@ -764,6 +812,24 @@ export function createFeishuRuntime(deps) {
     return payload;
   }
 
+  async function inviteCurrentAppBotToChat(chatId) {
+    const payload = await feishuRequest(
+      `/open-apis/im/v1/chats/${encodeURIComponent(chatId)}/members?member_id_type=app_id&succeed_type=1`,
+      {
+        method: "POST",
+        body: {
+          id_list: [feishuAppId]
+        }
+      }
+    );
+
+    return {
+      invalidIdList: Array.isArray(payload?.data?.invalid_id_list) ? payload.data.invalid_id_list : [],
+      notExistedIdList: Array.isArray(payload?.data?.not_existed_id_list) ? payload.data.not_existed_id_list : [],
+      pendingApprovalIdList: Array.isArray(payload?.data?.pending_approval_id_list) ? payload.data.pending_approval_id_list : []
+    };
+  }
+
   async function getTenantAccessToken() {
     const now = Date.now();
     if (tenantAccessToken && tenantAccessTokenExpiresAt - 60_000 > now) {
@@ -1059,8 +1125,27 @@ const FEISHU_TEXT_COMMANDS = new Set([
   "unbind",
   "mkchannel",
   "mkbind",
-  "mkrepo"
+  "mkrepo",
+  "joinbot",
+  "addbot"
 ]);
+
+function resolveTargetChatId(raw, fallbackChatId = "") {
+  const normalizedRaw = String(raw ?? "").trim();
+  if (!normalizedRaw) {
+    return String(fallbackChatId ?? "").trim();
+  }
+
+  const token = normalizedRaw.split(/\s+/, 1)[0]?.trim().replace(/^`|`$/g, "") ?? "";
+  if (!token) {
+    return String(fallbackChatId ?? "").trim();
+  }
+  const routeChatId = parseFeishuRouteId(token);
+  if (routeChatId) {
+    return routeChatId;
+  }
+  return token;
+}
 
 function buildLongConnectionEventId(event) {
   const messageId = String(event?.message?.message_id ?? "").trim();
