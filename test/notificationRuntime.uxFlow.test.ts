@@ -131,7 +131,6 @@ describe("notification runtime ux flow cutover", () => {
     const sentMessages: string[] = [];
     const statusEdits: string[] = [];
     const chunkedMessages: string[] = [];
-    const attachmentCalls: string[] = [];
     const itemAttachmentCalls: string[] = [];
     tracker.statusMessage.edit = async (text: string) => {
       statusEdits.push(text);
@@ -165,10 +164,7 @@ describe("notification runtime ux flow cutover", () => {
       maybeSendAttachmentsForItem: async (_tracker: unknown, item: { type?: string }) => {
         itemAttachmentCalls.push(String(item?.type ?? ""));
       },
-      maybeSendInferredAttachmentsFromText: async (_tracker: unknown, text: string) => {
-        attachmentCalls.push(text);
-        return 2;
-      },
+      maybeSendInferredAttachmentsFromText: async () => 2,
       recordFileChanges: () => {},
       summarizeItemForStatus: () => [],
       extractWebSearchDetails: () => [],
@@ -223,7 +219,6 @@ describe("notification runtime ux flow cutover", () => {
     expect(sentMessages.some((line) => line.startsWith("🖼️ Image:"))).toBe(false);
     expect(chunkedMessages).toContain("Summary complete with image /tmp/final.png");
     expect(chunkedMessages).toContain("```ansi\n+2 -1\n```");
-    expect(attachmentCalls).toEqual(["Summary complete with image /tmp/final.png"]);
     expect(itemAttachmentCalls).toEqual([]);
   });
 

@@ -118,11 +118,7 @@ export function createServerRequestRuntime(deps) {
     if (typeof params?.reason === "string" && params.reason) {
       detailLines.push(`reason: ${params.reason}`);
     }
-    if (Array.isArray(params?.command) && params.command.length > 0) {
-      detailLines.push(`command: \`${truncateStatusText(params.command.join(" "), 900)}\``);
-    } else if (typeof params?.command === "string" && params.command) {
-      detailLines.push(`command: \`${truncateStatusText(params.command, 900)}\``);
-    }
+    detailLines.push(...formatApprovalCommandLines(params?.command, truncateStatusText));
     if (typeof params?.cwd === "string" && params.cwd) {
       detailLines.push(`cwd: \`${params.cwd}\``);
     }
@@ -313,4 +309,27 @@ function buildUnsupportedToolCallResponse(originalMethod) {
 
 function makeRpcIdKey(id) {
   return `${typeof id}:${String(id)}`;
+}
+
+function formatApprovalCommandLines(command, truncateStatusText) {
+  if (typeof command === "string" && command) {
+    return [`command: \`${truncateStatusText(command, 900)}\``];
+  }
+  if (!Array.isArray(command) || command.length === 0) {
+    return [];
+  }
+
+  const stringArgs = command.filter((entry) => typeof entry === "string" && entry);
+  if (stringArgs.length === 0) {
+    return [];
+  }
+
+  const lines = ["command argv:"];
+  for (let index = 0; index < Math.min(stringArgs.length, 8); index += 1) {
+    lines.push(`[${index}] \`${truncateStatusText(stringArgs[index], 240)}\``);
+  }
+  if (stringArgs.length > 8) {
+    lines.push(`... ${stringArgs.length - 8} more args`);
+  }
+  return lines;
 }

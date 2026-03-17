@@ -157,6 +157,28 @@ describe("server request runtime integration", () => {
     expect("components" in (harness.approvalMessages[0] ?? {})).toBe(false);
   });
 
+  test("renders argv approvals as indexed args instead of flattening them into one fake shell command", async () => {
+    const harness = createHarness({ channelPlatform: "feishu" });
+
+    await harness.runtime.handleServerRequest({
+      id: "req-feishu-argv-1",
+      method: "commandExecution/requestApproval",
+      params: {
+        threadId: "thread-1",
+        command: ["/bin/zsh", "-lc", "cd /tmp/repo", "rg -n \"foo\" index.js", "sed -n '1,20p' index.js"],
+        cwd: "/tmp/repo"
+      }
+    });
+
+    expect(harness.approvalMessages.length).toBe(1);
+    const content = String(harness.approvalMessages[0]?.content ?? "");
+    expect(content).toContain("command argv:");
+    expect(content).toContain("[0] `/bin/zsh`");
+    expect(content).toContain("[1] `-lc`");
+    expect(content).toContain("[2] `cd /tmp/repo`");
+    expect(content).not.toContain('/bin/zsh -lc cd /tmp/repo rg -n "foo" index.js');
+  });
+
   test("applies approval decisions through shared command/button path", async () => {
     const harness = createHarness();
     harness.pendingApprovals.set("0001", {

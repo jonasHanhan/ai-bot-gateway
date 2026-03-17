@@ -1,4 +1,3 @@
-import { collectLikelyLocalPathsFromText } from "../attachments/service.js";
 import { isMissingRolloutPathError } from "../app/runtimeUtils.js";
 
 export function createNotificationRuntime(deps) {
@@ -10,7 +9,6 @@ export function createNotificationRuntime(deps) {
     normalizeCodexNotification,
     extractAgentMessageText,
     maybeSendAttachmentsForItem = async () => {},
-    maybeSendInferredAttachmentsFromText,
     recordFileChanges,
     buildFileDiffSection,
     sanitizeSummaryForDiscord = (text) => String(text ?? "").trim(),
@@ -258,8 +256,6 @@ export function createNotificationRuntime(deps) {
       tracker.fullText = normalizeFinalSummaryText(tracker.fullText);
       const summaryTextForDiscord = sanitizeSummaryForDiscord(tracker.fullText);
       const diffBlock = renderVerbosity === "ops" ? buildFileDiffSection(tracker) : "";
-      const attachmentHintText = tracker.fullText;
-      const inferredSummaryPaths = collectLikelyLocalPathsFromText(attachmentHintText);
       debugLog("summary", "prepared summary text", {
         threadId: tracker.threadId,
         turnId: tracker.threadId,
@@ -267,22 +263,11 @@ export function createNotificationRuntime(deps) {
         rawLength: tracker.fullText.length,
         sanitizedLength: summaryTextForDiscord.length,
         rawPreview: summarizeForDebug(tracker.fullText, 180),
-        sanitizedPreview: summarizeForDebug(summaryTextForDiscord, 180),
-        inferredSummaryPathCount: inferredSummaryPaths.length,
-        inferredSummaryPaths: inferredSummaryPaths.slice(0, 8)
+        sanitizedPreview: summarizeForDebug(summaryTextForDiscord, 180)
       });
       if (summaryTextForDiscord) {
         await sendFinalSummary(tracker, summaryTextForDiscord);
       }
-      const sentImages = await maybeSendInferredAttachmentsFromText(tracker, attachmentHintText);
-      tracker.hasSummaryImageAttachment = Number(sentImages) > 0;
-      debugLog("attachments", "inferred attachment send complete", {
-        threadId: tracker.threadId,
-        turnId: tracker.threadId,
-        discordMessageId: tracker.statusMessageId ?? null,
-        inferredSentCount: Number(sentImages) || 0,
-        telemetry: tracker.attachmentTelemetry ?? null
-      });
       if (diffBlock) {
         await sendChunkedToChannel(tracker.channel, diffBlock);
       }
