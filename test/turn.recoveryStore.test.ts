@@ -7,13 +7,12 @@ import { createTurnRecoveryStore } from "../src/turns/recoveryStore.js";
 const tempDirs: string[] = [];
 
 afterEach(async () => {
-  delete process.env.TURN_RECOVERY_NOTIFY;
   for (const dir of tempDirs.splice(0)) {
     await fs.rm(dir, { recursive: true, force: true });
   }
 });
 
-async function makeStore() {
+async function makeStore(recoveryConfig: Record<string, unknown> = {}) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-bridge-recovery-"));
   tempDirs.push(dir);
   const recoveryPath = path.join(dir, "inflight-turns.json");
@@ -22,6 +21,7 @@ async function makeStore() {
     path,
     recoveryPath,
     debugLog: () => {},
+    recoveryConfig,
     dataDir: dir
   });
   await store.load();
@@ -234,9 +234,8 @@ describe("turn recovery store", () => {
     expect(store.getRequestStatus("req-repeat")?.status).toBe("recovery_resumed");
   });
 
-  test("does not emit recovery notice when TURN_RECOVERY_NOTIFY=0", async () => {
-    process.env.TURN_RECOVERY_NOTIFY = "0";
-    const { store } = await makeStore();
+  test("does not emit recovery notice when notifyEnabled=false", async () => {
+    const { store } = await makeStore({ notifyEnabled: false });
     await store.upsertTurnFromTracker({
       threadId: "thread-silent",
       repoChannelId: "channel-silent",
@@ -287,5 +286,50 @@ describe("turn recovery store", () => {
     expect(sendCount).toBe(0);
     expect(Object.keys(store.snapshot().turns).length).toBe(0);
     expect(store.getRequestStatus("req-silent")?.status).toBe("recovery_resumed");
+  });
+
+  test("auto-evicts old request statuses when requestStatusMaxPerThread is reached", async () => {
+    const { store } = await makeStore({ requestStatusMaxPerThread: 2 });
+
+    await store.upsertTurnFromTracker({
+      threadId: "thread-cap",
+      repoChannelId: "channel-cap",
+      requestId: "req-cap-1",
+      sourceMessageId: "msg-cap-1",
+      channel: { id: "channel-cap" },
+      statusMessageId: "status-cap-1",
+      cwd: "/tmp/repo",
+      lifecyclePhase: "running",
+      seenDelta: false,
+      fullText: ""
+    });
+    await store.upsertTurnFromTracker({
+      threadId: "thread-cap",
+      repoChannelId: "channel-cap",
+      requestId: "req-cap-2",
+      sourceMessageId: "msg-cap-2",
+      channel: { id: "channel-cap" },
+      statusMessageId: "status-cap-2",
+      cwd: "/tmp/repo",
+      lifecyclePhase: "running",
+      seenDelta: false,
+      fullText: ""
+    });
+    await store.upsertTurnFromTracker({
+      threadId: "thread-cap",
+      repoChannelId: "channel-cap",
+      requestId: "req-cap-3",
+      sourceMessageId: "msg-cap-3",
+      channel: { id: "channel-cap" },
+      statusMessageId: "status-cap-3",
+      cwd: "/tmp/repo",
+      lifecyclePhase: "running",
+      seenDelta: false,
+      fullText: ""
+    });
+
+    expect(store.getRequestStatus("req-cap-1")).toBeNull();
+    expect(store.getRequestStatus("req-cap-2")?.status).toBe("processing");
+    expect(store.getRequestStatus("req-cap-3")?.status).toBe("processing");
   });
 });

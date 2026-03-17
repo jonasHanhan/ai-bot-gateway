@@ -1,17 +1,25 @@
 import { resolve, normalize } from "node:path";
 import { isMissingRolloutPathError } from "../app/runtimeUtils.js";
 
-const DEFAULT_REQUEST_TTL_MS = 7 * 24 * 60 * 60 * 1000;  // 7 days
+const DEFAULT_REQUEST_TTL_MS = 3 * 24 * 60 * 60 * 1000;  // 3 days
 const DEFAULT_MAX_REQUESTS = 5000;
+const DEFAULT_MAX_REQUESTS_PER_THREAD = 300;
 const MIN_REQUEST_TTL_MS = 60_000;  // 1 minute
 const MIN_MAX_REQUESTS = 100;
+const MIN_MAX_REQUESTS_PER_THREAD = 1;
 const MAX_THREAD_LIST_PAGES = 20;
 const THREADS_PER_PAGE = 100;
-const MAX_REQUESTS_PER_THREAD = 100;
 const THREAD_LIST_CACHE_TTL_MS = 5 * 60 * 1000;  // 5 minutes
 
 export function createTurnRecoveryStore(deps) {
-  const { fs, path, recoveryPath, debugLog, dataDir = fs.cwd ? fs.cwd() : process.cwd() } = deps;
+  const {
+    fs,
+    path,
+    recoveryPath,
+    debugLog,
+    recoveryConfig = {},
+    dataDir = fs.cwd ? fs.cwd() : process.cwd()
+  } = deps;
 
   // P0: Path traversal protection
   const normalizedRecoveryPath = normalize(recoveryPath);
@@ -32,13 +40,16 @@ export function createTurnRecoveryStore(deps) {
     turns: {},
     requests: {}
   };
-  const requestTtlMs = Number.isFinite(Number(process.env.TURN_REQUEST_STATUS_TTL_MS))
-    ? Math.max(MIN_REQUEST_TTL_MS, Math.floor(Number(process.env.TURN_REQUEST_STATUS_TTL_MS)))
+  const requestTtlMs = Number.isFinite(Number(recoveryConfig.requestStatusTtlMs))
+    ? Math.max(MIN_REQUEST_TTL_MS, Math.floor(Number(recoveryConfig.requestStatusTtlMs)))
     : DEFAULT_REQUEST_TTL_MS;
-  const maxRequests = Number.isFinite(Number(process.env.TURN_REQUEST_STATUS_MAX_RECORDS))
-    ? Math.max(MIN_MAX_REQUESTS, Math.floor(Number(process.env.TURN_REQUEST_STATUS_MAX_RECORDS)))
+  const maxRequests = Number.isFinite(Number(recoveryConfig.requestStatusMaxRecords))
+    ? Math.max(MIN_MAX_REQUESTS, Math.floor(Number(recoveryConfig.requestStatusMaxRecords)))
     : DEFAULT_MAX_REQUESTS;
-  const recoveryNotifyEnabled = process.env.TURN_RECOVERY_NOTIFY !== "0";
+  const maxRequestsPerThread = Number.isFinite(Number(recoveryConfig.requestStatusMaxPerThread))
+    ? Math.max(MIN_MAX_REQUESTS_PER_THREAD, Math.floor(Number(recoveryConfig.requestStatusMaxPerThread)))
+    : DEFAULT_MAX_REQUESTS_PER_THREAD;
+  const recoveryNotifyEnabled = recoveryConfig.notifyEnabled !== false;
   let saveQueue = Promise.resolve();
   let threadListCache = null;
   let threadListCacheTime = 0;
@@ -102,23 +113,46 @@ export function createTurnRecoveryStore(deps) {
     await nextSave;
   }
 
+  function evictThreadRequestsIfNeeded(threadId, keepSlots = maxRequestsPerThread - 1) {
+    if (!threadId) {
+      return;
+    }
+    const requestIdsForThread = Object.keys(store.requests).filter((requestId) => store.requests[requestId]?.threadId === threadId);
+    if (requestIdsForThread.length <= keepSlots) {
+      return;
+    }
+
+    const sortable = requestIdsForThread
+      .map((requestId) => {
+        const value = store.requests[requestId] ?? {};
+        const updatedAt = new Date(value?.updatedAt ?? value?.createdAt ?? 0).getTime();
+        const status = typeof value?.status === "string" ? value.status : "";
+        return {
+          requestId,
+          updatedAt: Number.isFinite(updatedAt) ? updatedAt : 0,
+          isProcessing: status === "processing"
+        };
+      })
+      .sort((left, right) => {
+        if (left.isProcessing !== right.isProcessing) {
+          return left.isProcessing ? 1 : -1;
+        }
+        return left.updatedAt - right.updatedAt;
+      });
+
+    const removeCount = sortable.length - keepSlots;
+    for (let i = 0; i < removeCount; i += 1) {
+      delete store.requests[sortable[i].requestId];
+    }
+  }
+
   async function upsertTurnFromTracker(tracker) {
     if (!tracker?.threadId || !tracker?.repoChannelId) {
       return;
     }
 
-    // P0: Resource exhaustion protection - limit requests per thread
-    const threadRequests = Object.values(store.requests).filter(
-      req => req.threadId === tracker.threadId
-    );
-
-    if (threadRequests.length >= MAX_REQUESTS_PER_THREAD) {
-      console.warn(`Thread ${tracker.threadId} has too many requests (${threadRequests.length}/${MAX_REQUESTS_PER_THREAD}), skipping`, {
-        threadId: tracker.threadId,
-        repoChannelId: tracker.repoChannelId
-      });
-      return;
-    }
+    // P0: Resource exhaustion protection - auto-prune per-thread request history
+    evictThreadRequestsIfNeeded(tracker.threadId);
 
     store.turns[tracker.threadId] = {
       threadId: tracker.threadId,

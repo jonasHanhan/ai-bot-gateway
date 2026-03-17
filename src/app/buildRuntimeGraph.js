@@ -32,6 +32,7 @@ export async function buildRuntimeGraph(deps) {
     attachmentItemTypes,
     attachmentIssueLimitPerTurn,
     inFlightRecoveryPath,
+    turnRecovery,
     extraWritableRoots,
     stripAnsiForDiscord
   } = runtimeEnv;
@@ -68,6 +69,7 @@ export async function buildRuntimeGraph(deps) {
     fs,
     path,
     recoveryPath: inFlightRecoveryPath,
+    recoveryConfig: turnRecovery,
     debugLog
   });
   await turnRecoveryStore.load();

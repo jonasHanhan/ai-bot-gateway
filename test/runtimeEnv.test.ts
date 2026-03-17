@@ -29,6 +29,10 @@ const ENV_KEYS = [
   "DISCORD_RESTART_ACK_PATH",
   "DISCORD_RESTART_NOTICE_PATH",
   "DISCORD_INFLIGHT_RECOVERY_PATH",
+  "TURN_REQUEST_STATUS_TTL_MS",
+  "TURN_REQUEST_STATUS_MAX_RECORDS",
+  "TURN_REQUEST_STATUS_MAX_PER_THREAD",
+  "TURN_RECOVERY_NOTIFY",
   "DISCORD_EXIT_ON_RESTART_ACK",
   "DISCORD_HEARTBEAT_INTERVAL_MS",
   "DISCORD_DEBUG_LOGGING",
@@ -77,6 +81,10 @@ describe("runtime env", () => {
     process.env.DISCORD_DEBUG_LOGGING = "1";
     process.env.DISCORD_PROJECTS_CATEGORY_NAME = "custom-projects";
     process.env.CODEX_EXTRA_WRITABLE_ROOTS = "./tmp-a:./tmp-b";
+    process.env.TURN_REQUEST_STATUS_TTL_MS = "123456";
+    process.env.TURN_REQUEST_STATUS_MAX_RECORDS = "2222";
+    process.env.TURN_REQUEST_STATUS_MAX_PER_THREAD = "33";
+    process.env.TURN_RECOVERY_NOTIFY = "0";
     process.env.FEISHU_MESSAGE_CHUNK_LIMIT = "8000";
 
     const env = loadRuntimeEnv();
@@ -102,6 +110,10 @@ describe("runtime env", () => {
     expect(env.debugLoggingEnabled).toBe(true);
     expect(env.projectsCategoryName).toBe("custom-projects");
     expect(env.extraWritableRoots).toHaveLength(2);
+    expect(env.turnRecovery.requestStatusTtlMs).toBe(123456);
+    expect(env.turnRecovery.requestStatusMaxRecords).toBe(2222);
+    expect(env.turnRecovery.requestStatusMaxPerThread).toBe(33);
+    expect(env.turnRecovery.notifyEnabled).toBe(false);
   });
 
   test("falls back to safe defaults for invalid numeric values", () => {
@@ -110,6 +122,9 @@ describe("runtime env", () => {
     process.env.DISCORD_ATTACHMENT_MAX_BYTES = "0";
     process.env.DISCORD_MAX_ATTACHMENT_ISSUES_PER_TURN = "-1";
     process.env.DISCORD_HEARTBEAT_INTERVAL_MS = "1000";
+    process.env.TURN_REQUEST_STATUS_TTL_MS = "0";
+    process.env.TURN_REQUEST_STATUS_MAX_RECORDS = "-1";
+    process.env.TURN_REQUEST_STATUS_MAX_PER_THREAD = "0";
 
     const env = loadRuntimeEnv();
 
@@ -119,6 +134,10 @@ describe("runtime env", () => {
     expect(env.attachmentMaxBytes).toBe(8 * 1024 * 1024);
     expect(env.attachmentIssueLimitPerTurn).toBe(1);
     expect(env.heartbeatIntervalMs).toBe(30000);
+    expect(env.turnRecovery.requestStatusTtlMs).toBe(3 * 24 * 60 * 60 * 1000);
+    expect(env.turnRecovery.requestStatusMaxRecords).toBe(5000);
+    expect(env.turnRecovery.requestStatusMaxPerThread).toBe(300);
+    expect(env.turnRecovery.notifyEnabled).toBe(true);
   });
 
   test("defaults Feishu unbound chat mode to open", () => {
