@@ -28,6 +28,54 @@ export function buildSlashCommandPayloads() {
         option.setName("path").setDescription("Absolute repo path to bind").setRequired(true)
       ),
     new SlashCommandBuilder()
+      .setName("bind")
+      .setDescription("Bind this channel to an existing repo path")
+      .addStringOption((option) =>
+        option.setName("path").setDescription("Absolute repo path to bind").setRequired(true)
+      ),
+    new SlashCommandBuilder()
+      .setName("rebind")
+      .setDescription("Rebind this channel to a different repo path")
+      .addStringOption((option) =>
+        option.setName("path").setDescription("Absolute repo path to bind").setRequired(true)
+      ),
+    new SlashCommandBuilder().setName("unbind").setDescription("Remove the repo binding from this channel"),
+    new SlashCommandBuilder()
+      .setName("mkchannel")
+      .setDescription("Create a new text channel")
+      .addStringOption((option) =>
+        option.setName("name").setDescription("Channel name").setRequired(true)
+      ),
+    new SlashCommandBuilder()
+      .setName("mkrepo")
+      .setDescription("Create a new text channel and bind a new project directory under WORKSPACE_ROOT")
+      .addStringOption((option) =>
+        option.setName("name").setDescription("Channel and project name").setRequired(true)
+      ),
+    new SlashCommandBuilder()
+      .setName("mkbind")
+      .setDescription("Create a new text channel and bind it to an existing repo path")
+      .addStringOption((option) =>
+        option.setName("name").setDescription("Channel name").setRequired(true)
+      )
+      .addStringOption((option) =>
+        option.setName("path").setDescription("Absolute repo path to bind").setRequired(true)
+      ),
+    new SlashCommandBuilder()
+      .setName("setmodel")
+      .setDescription("Set a model override for this channel")
+      .addStringOption((option) =>
+        option.setName("model").setDescription("Model id").setRequired(true)
+      ),
+    new SlashCommandBuilder().setName("clearmodel").setDescription("Clear this channel's model override"),
+    new SlashCommandBuilder()
+      .setName("setagent")
+      .setDescription("Set an agent override for this channel")
+      .addStringOption((option) =>
+        option.setName("agent").setDescription("Agent id").setRequired(true)
+      ),
+    new SlashCommandBuilder().setName("clearagent").setDescription("Clear this channel's agent override"),
+    new SlashCommandBuilder()
       .setName("approve")
       .setDescription("Approve the latest or specified pending request")
       .addStringOption((option) =>
@@ -79,6 +127,26 @@ export function buildCommandTextFromInteraction(interaction) {
       return "!agents";
     case "setpath":
       return joinCommand("!setpath", getString("path"));
+    case "bind":
+      return joinCommand("!bind", getString("path"));
+    case "rebind":
+      return joinCommand("!rebind", getString("path"));
+    case "unbind":
+      return "!unbind";
+    case "mkchannel":
+      return joinCommand("!mkchannel", getString("name"));
+    case "mkrepo":
+      return joinCommand("!mkrepo", getString("name"));
+    case "mkbind":
+      return joinCommand("!mkbind", [getString("name"), getString("path")].filter(Boolean).join(" "));
+    case "setmodel":
+      return joinCommand("!setmodel", getString("model"));
+    case "clearmodel":
+      return "!clearmodel";
+    case "setagent":
+      return joinCommand("!setagent", getString("agent"));
+    case "clearagent":
+      return "!clearagent";
     case "approve":
       return joinCommand("!approve", getString("id"));
     case "decline":

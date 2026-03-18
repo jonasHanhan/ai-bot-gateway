@@ -29,6 +29,16 @@ describe("slash commands", () => {
       "where",
       "agents",
       "setpath",
+      "bind",
+      "rebind",
+      "unbind",
+      "mkchannel",
+      "mkrepo",
+      "mkbind",
+      "setmodel",
+      "clearmodel",
+      "setagent",
+      "clearagent",
       "approve",
       "decline",
       "cancel",
@@ -49,6 +59,33 @@ describe("slash commands", () => {
     expect(
       buildCommandTextFromInteraction({ commandName: "setpath", options: createOptions({ path: "/tmp/repo-one" }) })
     ).toBe("!setpath /tmp/repo-one");
+    expect(buildCommandTextFromInteraction({ commandName: "bind", options: createOptions({ path: "/tmp/repo-one" }) })).toBe(
+      "!bind /tmp/repo-one"
+    );
+    expect(
+      buildCommandTextFromInteraction({ commandName: "rebind", options: createOptions({ path: "/tmp/repo-two" }) })
+    ).toBe("!rebind /tmp/repo-two");
+    expect(buildCommandTextFromInteraction({ commandName: "unbind", options: createOptions() })).toBe("!unbind");
+    expect(buildCommandTextFromInteraction({ commandName: "mkchannel", options: createOptions({ name: "repo-two" }) })).toBe(
+      "!mkchannel repo-two"
+    );
+    expect(buildCommandTextFromInteraction({ commandName: "mkrepo", options: createOptions({ name: "repo-two" }) })).toBe(
+      "!mkrepo repo-two"
+    );
+    expect(
+      buildCommandTextFromInteraction({
+        commandName: "mkbind",
+        options: createOptions({ name: "repo-two", path: "/tmp/repo-two" })
+      })
+    ).toBe("!mkbind repo-two /tmp/repo-two");
+    expect(
+      buildCommandTextFromInteraction({ commandName: "setmodel", options: createOptions({ model: "gpt-5.4-codex" }) })
+    ).toBe("!setmodel gpt-5.4-codex");
+    expect(buildCommandTextFromInteraction({ commandName: "clearmodel", options: createOptions() })).toBe("!clearmodel");
+    expect(
+      buildCommandTextFromInteraction({ commandName: "setagent", options: createOptions({ agent: "claude" }) })
+    ).toBe("!setagent claude");
+    expect(buildCommandTextFromInteraction({ commandName: "clearagent", options: createOptions() })).toBe("!clearagent");
     expect(buildCommandTextFromInteraction({ commandName: "agents", options: createOptions() })).toBe("!agents");
     expect(buildCommandTextFromInteraction({ commandName: "initrepo", options: createOptions({ force: true }) })).toBe(
       "!initrepo force"
@@ -84,8 +121,8 @@ describe("slash commands", () => {
     expect(summary).toEqual({
       scope: "guild",
       guildId: "guild-1",
-      count: 15
+      count: 25
     });
-    expect(calls).toEqual([{ target: "guild", count: 15 }]);
+    expect(calls).toEqual([{ target: "guild", count: 25 }]);
   });
 });

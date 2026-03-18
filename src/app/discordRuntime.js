@@ -217,6 +217,41 @@ export function createDiscordRuntime(deps) {
       return;
     }
 
+    if (interaction.commandName === "mkchannel") {
+      const rest = commandText.replace(/^!mkchannel\b/i, "").trim();
+      await handleMakeChannelCommand(message, rest);
+      return;
+    }
+
+    if (interaction.commandName === "mkrepo") {
+      const rest = commandText.replace(/^!mkrepo\b/i, "").trim();
+      await handleMakeChannelCommand(message, rest, { initRepo: true });
+      return;
+    }
+
+    if (interaction.commandName === "mkbind") {
+      const rest = commandText.replace(/^!mkbind\b/i, "").trim();
+      await handleMakeChannelCommand(message, rest, { bindPath: true });
+      return;
+    }
+
+    if (interaction.commandName === "bind") {
+      const rest = commandText.replace(/^!bind\b/i, "").trim();
+      await handleBindCommand(message, rest);
+      return;
+    }
+
+    if (interaction.commandName === "rebind") {
+      const rest = commandText.replace(/^!rebind\b/i, "").trim();
+      await handleBindCommand(message, rest, { rebind: true });
+      return;
+    }
+
+    if (interaction.commandName === "unbind") {
+      await handleUnbindCommand(message);
+      return;
+    }
+
     const context = resolveRepoContext(message, {
       channelSetups: getChannelSetups(),
       config,

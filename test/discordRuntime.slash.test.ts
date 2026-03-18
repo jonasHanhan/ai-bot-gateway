@@ -120,13 +120,57 @@ function createRuntime(overrides: Record<string, unknown> = {}) {
       calls.push({ type: "initrepo", payload: rest });
       await message.reply(`initrepo ${rest}`);
     },
-    buildCommandTextFromInteraction: (interaction: { commandName: string; options: { getString: (name: string) => string | null } }) =>
-      interaction.commandName === "status" ? "!status" : `!${interaction.commandName} ${interaction.options.getString("reason") ?? ""}`.trim(),
+    buildCommandTextFromInteraction: (interaction: {
+      commandName: string;
+      options: { getString: (name: string) => string | null; getBoolean: (name: string) => boolean | null };
+    }) => {
+      switch (interaction.commandName) {
+        case "status":
+          return "!status";
+        case "resync":
+          return "!resync";
+        case "rebuild":
+          return "!rebuild";
+        case "setpath":
+        case "bind":
+        case "rebind":
+          return `!${interaction.commandName} ${interaction.options.getString("path") ?? ""}`.trim();
+        case "mkchannel":
+        case "mkrepo":
+          return `!${interaction.commandName} ${interaction.options.getString("name") ?? ""}`.trim();
+        case "mkbind":
+          return `!mkbind ${interaction.options.getString("name") ?? ""} ${interaction.options.getString("path") ?? ""}`.trim();
+        case "initrepo":
+          return interaction.options.getBoolean("force") ? "!initrepo force" : "!initrepo";
+        default:
+          return `!${interaction.commandName} ${interaction.options.getString("reason") ?? interaction.options.getString("model") ?? interaction.options.getString("agent") ?? ""}`.trim();
+      }
+    },
     handleSetPathCommand: async (message: { reply: (text: string) => Promise<unknown> }, rest: string) => {
       calls.push({ type: "setpath", payload: rest });
       await message.reply(`setpath ${rest}`);
     },
-    registerSlashCommands: async () => ({ scope: "guild", guildId: "guild-1", count: 14 }),
+    handleMakeChannelCommand: async (
+      message: { reply: (text: string) => Promise<unknown> },
+      rest: string,
+      options?: Record<string, unknown>
+    ) => {
+      calls.push({ type: "make-channel", payload: { rest, options: options ?? null } });
+      await message.reply(`make-channel ${rest}`);
+    },
+    handleBindCommand: async (
+      message: { reply: (text: string) => Promise<unknown> },
+      rest: string,
+      options?: Record<string, unknown>
+    ) => {
+      calls.push({ type: "bind", payload: { rest, options: options ?? null } });
+      await message.reply(`bind ${rest}`);
+    },
+    handleUnbindCommand: async (message: { reply: (text: string) => Promise<unknown> }) => {
+      calls.push({ type: "unbind", payload: null });
+      await message.reply("unbind");
+    },
+    registerSlashCommands: async () => ({ scope: "guild", guildId: "guild-1", count: 25 }),
     parseApprovalButtonCustomId: () => null,
     approvalButtonPrefix: "approval",
     pendingApprovals: new Map(),
@@ -177,6 +221,30 @@ describe("discord runtime slash commands", () => {
     await runtime.handleInteraction(interaction);
 
     expect(calls).toEqual([{ type: "bootstrap", payload: { forceRebuild: false } }]);
+  });
+
+  test("handles /bind before repo context lookup", async () => {
+    const { runtime, calls } = createRuntime({
+      resolveRepoContext: () => null
+    });
+    const { interaction, replies } = createInteraction("bind", { path: "/tmp/repo-two" });
+
+    await runtime.handleInteraction(interaction);
+
+    expect(calls).toEqual([{ type: "bind", payload: { rest: "/tmp/repo-two", options: null } }]);
+    expect(replies).toEqual(["bind /tmp/repo-two"]);
+  });
+
+  test("handles /mkrepo without requiring existing repo context", async () => {
+    const { runtime, calls } = createRuntime({
+      resolveRepoContext: () => null
+    });
+    const { interaction, replies } = createInteraction("mkrepo", { name: "repo-two" });
+
+    await runtime.handleInteraction(interaction);
+
+    expect(calls).toEqual([{ type: "make-channel", payload: { rest: "repo-two", options: { initRepo: true } } }]);
+    expect(replies).toEqual(["make-channel repo-two"]);
   });
 
   test("auto-initializes a new text channel created under the managed projects category", async () => {
