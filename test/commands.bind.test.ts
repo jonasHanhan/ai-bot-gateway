@@ -343,8 +343,8 @@ describe("bind commands", () => {
     });
   });
 
-  test("setmodel rejects non-codex model ids before persisting", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "dc-bridge-setmodel-reject-"));
+  test("setmodel accepts plain gpt-5.4 model ids before persisting", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "dc-bridge-setmodel-gpt54-"));
     tempDirs.push(dir);
     const { router, replies, getChannelSetups, configPath } = await createRouterHarness(
       {
@@ -366,19 +366,21 @@ describe("bind commands", () => {
       }
     };
 
-    await router.handleCommand(message, "!setmodel GPT-5.4-Mini", context);
+    await router.handleCommand(message, "!setmodel GPT-5.4", context);
 
     expect(getChannelSetups()).toEqual({
       "channel-1": {
-        cwd: dir
+        cwd: dir,
+        model: "gpt-5.4"
       }
     });
-    expect(replies.at(-1)).toContain("Unsupported model override `gpt-5.4-mini`.");
+    expect(replies.at(-1)).toContain("Set this channel model override to `gpt-5.4`.");
     expect(JSON.parse(await fs.readFile(configPath, "utf8"))).toEqual({
       autoDiscoverProjects: false,
       channels: {
         "channel-1": {
-          cwd: dir
+          cwd: dir,
+          model: "gpt-5.4"
         }
       }
     });

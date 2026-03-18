@@ -972,23 +972,18 @@ function parseRequestedModelOverride(rawValue, config) {
     };
   }
 
-  const configuredModels = collectConfiguredModelIds(config);
-  if (configuredModels.has(normalized) || looksLikeCodexModelId(normalized)) {
+  if (isValidModelId(normalized)) {
     return {
       ok: true,
       value: normalized
     };
   }
 
-  const suggestions = [...configuredModels].slice(0, 4);
-  const suggestionText =
-    suggestions.length > 0
-      ? `Configured/known models here: ${suggestions.map((model) => `\`${model}\``).join(", ")}.`
-      : "Use a Codex model id such as `gpt-5.3-codex` or `gpt-5.4-codex`.";
-
   return {
     ok: false,
-    message: `Unsupported model override \`${normalized}\`. This bridge accepts configured models or Codex model ids. ${suggestionText}`
+    message:
+      `Unsupported model override \`${normalized}\`. Use a model id made of letters, numbers, dots, dashes, or underscores.` +
+      ` If you want to see the configured defaults and overrides in this repo, use \`!models\` or \`/model-list\`.`
   };
 }
 
@@ -999,30 +994,8 @@ function normalizeModelId(value) {
     .replace(/[\s_]+/g, "-");
 }
 
-function looksLikeCodexModelId(value) {
-  return value.includes("codex");
-}
-
-function collectConfiguredModelIds(config) {
-  const models = new Set();
-  const defaultModel = normalizeModelId(config?.defaultModel);
-  if (defaultModel) {
-    models.add(defaultModel);
-  }
-
-  const agents = config?.agents;
-  if (!agents || typeof agents !== "object") {
-    return models;
-  }
-
-  for (const agent of Object.values(agents)) {
-    const model = normalizeModelId(agent?.model);
-    if (model) {
-      models.add(model);
-    }
-  }
-
-  return models;
+function isValidModelId(value) {
+  return /^[a-z0-9][a-z0-9._-]*$/.test(String(value ?? "").trim());
 }
 
 async function pathExists(fsModule, targetPath) {
