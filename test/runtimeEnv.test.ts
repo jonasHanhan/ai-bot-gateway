@@ -38,4 +38,19 @@ describe("runtime env", () => {
       }
     }
   });
+
+  test("reads attachment log flag", () => {
+    const previous = process.env.DISCORD_LOG_ATTACHMENTS;
+    process.env.DISCORD_LOG_ATTACHMENTS = "1";
+    try {
+      const env = loadRuntimeEnv();
+      expect(env.attachmentLogEnabled).toBe(true);
+    } finally {
+      if (previous === undefined) {
+        delete process.env.DISCORD_LOG_ATTACHMENTS;
+      } else {
+        process.env.DISCORD_LOG_ATTACHMENTS = previous;
+      }
+    }
+  });
 });

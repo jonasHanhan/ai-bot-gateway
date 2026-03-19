@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import process from "node:process";
 
@@ -17,7 +18,8 @@ export async function maybeSendAttachmentsForItem(tracker, item, context) {
     safeSendToChannel,
     safeSendToChannelPayload,
     truncateStatusText,
-    maxAttachmentIssueMessages
+    maxAttachmentIssueMessages,
+    attachmentLog = () => {}
   } = context;
 
   if (!attachmentsEnabled || !tracker?.channel || !item || typeof item !== "object") {
@@ -30,10 +32,21 @@ export async function maybeSendAttachmentsForItem(tracker, item, context) {
 
   const candidates = extractAttachmentCandidates(item, { attachmentInferFromText });
   if (candidates.length === 0) {
+    attachmentLog("item_no_candidates", {
+      routeId: tracker?.repoChannelId ?? tracker?.channel?.id ?? null,
+      itemType,
+      itemId: item?.id ?? null
+    });
     return;
   }
   const telemetry = ensureAttachmentTelemetry(tracker);
-      telemetry.detected += candidates.length;
+  telemetry.detected += candidates.length;
+  attachmentLog("item_candidates", {
+    routeId: tracker?.repoChannelId ?? tracker?.channel?.id ?? null,
+    itemType,
+    itemId: item?.id ?? null,
+    candidates: candidates.map((candidate) => ({ path: candidate.path, intent: candidate.intent }))
+  });
 
   for (const candidate of candidates) {
     const announceFailures =
@@ -58,7 +71,8 @@ export async function maybeSendAttachmentsForItem(tracker, item, context) {
       safeSendToChannelPayload,
       truncateStatusText,
       maxAttachmentIssueMessages,
-      telemetry
+      telemetry,
+      attachmentLog
       }
     );
   }
@@ -73,7 +87,8 @@ export async function maybeSendInferredAttachmentsFromText(tracker, text, contex
     statusLabelForItemType,
     safeSendToChannel,
     safeSendToChannelPayload,
-    truncateStatusText
+    truncateStatusText,
+    attachmentLog = () => {}
   } = context;
 
   if (!attachmentsEnabled || !tracker?.channel || typeof text !== "string" || !text.trim()) {
@@ -82,11 +97,18 @@ export async function maybeSendInferredAttachmentsFromText(tracker, text, contex
 
   const inferred = [...new Set(collectLikelyLocalPathsFromText(text))];
   if (inferred.length === 0) {
+    attachmentLog("inferred_no_paths", {
+      routeId: tracker?.repoChannelId ?? tracker?.channel?.id ?? null
+    });
     return 0;
   }
 
   const telemetry = ensureAttachmentTelemetry(tracker);
   telemetry.detected += inferred.length;
+  attachmentLog("inferred_candidates", {
+    routeId: tracker?.repoChannelId ?? tracker?.channel?.id ?? null,
+    paths: inferred
+  });
   let sentCount = 0;
   for (const imagePath of inferred) {
     const sent = await sendAttachmentForPath(
@@ -106,7 +128,8 @@ export async function maybeSendInferredAttachmentsFromText(tracker, text, contex
         safeSendToChannelPayload,
         truncateStatusText,
         maxAttachmentIssueMessages: 0,
-        telemetry
+        telemetry,
+        attachmentLog
       }
     );
     if (sent) {
@@ -155,6 +178,10 @@ export function extractAttachmentCandidates(item, options = {}) {
       }
     }
   }
+  for (const value of collectStructuredAttachmentValues(item)) {
+    addDeclared(value, "path");
+  }
+
   const declaredCandidates = [...new Set(declared)].map((value) => {
     const intent = item?.type === "imageView" ? "explicit_user_request" : "explicit_structured";
     return { path: value, intent };
@@ -268,6 +295,49 @@ function extractInferredAttachmentPaths(item) {
   return [...new Set(inferredPaths)];
 }
 
+function collectStructuredAttachmentValues(item) {
+  const values = [];
+  const candidateKeys = new Set(["path", "file", "outputPath", "artifactPath", "image_url", "imageUrl", "dataUrl"]);
+  const queue = [{ value: item, depth: 0 }];
+  const seen = new Set();
+
+  while (queue.length > 0 && values.length < 64) {
+    const current = queue.shift();
+    if (!current || current.depth > 3) {
+      continue;
+    }
+    const { value, depth } = current;
+    if (!value || typeof value !== "object") {
+      continue;
+    }
+    if (seen.has(value)) {
+      continue;
+    }
+    seen.add(value);
+
+    if (Array.isArray(value)) {
+      for (const entry of value) {
+        queue.push({ value: entry, depth: depth + 1 });
+      }
+      continue;
+    }
+
+    for (const [key, entry] of Object.entries(value)) {
+      if (candidateKeys.has(key) && typeof entry === "string") {
+        const trimmed = entry.trim();
+        if (trimmed && (isHighConfidencePathReference(trimmed) || isInlineDataImageUrl(trimmed))) {
+          values.push(trimmed);
+        }
+      }
+      if (entry && typeof entry === "object") {
+        queue.push({ value: entry, depth: depth + 1 });
+      }
+    }
+  }
+
+  return [...new Set(values)];
+}
+
 export function collectLikelyLocalPathsFromText(text) {
   if (typeof text !== "string" || !text) {
     return [];
@@ -355,7 +425,8 @@ async function sendAttachmentForPath(tracker, filePath, options = {}, context) {
     safeSendToChannelPayload,
     truncateStatusText,
     maxAttachmentIssueMessages,
-    telemetry
+    telemetry,
+    attachmentLog = () => {}
   } = context;
 
   if (!tracker?.channel) {
@@ -365,16 +436,55 @@ async function sendAttachmentForPath(tracker, filePath, options = {}, context) {
     return false;
   }
   const trimmed = filePath.trim();
-  if (!isSupportedMediaPath(trimmed)) {
+  attachmentLog("candidate_start", {
+    routeId: tracker?.repoChannelId ?? tracker?.channel?.id ?? null,
+    threadId: tracker?.threadId ?? null,
+    itemType: itemType ?? null,
+    path: describeAttachmentInput(trimmed)
+  });
+  let candidatePath = trimmed;
+  if (isInlineDataImageUrl(candidatePath)) {
+    const materializedPath = await materializeInlineDataImage(candidatePath, imageCacheDir);
+    if (!materializedPath) {
+      telemetry.failed += 1;
+      attachmentLog("skip_unresolved", {
+        routeId: tracker?.repoChannelId ?? tracker?.channel?.id ?? null,
+        itemType: itemType ?? null,
+        path: describeAttachmentInput(trimmed),
+        reason: "inline_data_url_materialization_failed"
+      });
+      await maybeSendAttachmentIssue(
+        tracker,
+        `missing:${createHash("sha256").update(trimmed).digest("hex")}`,
+        "Attachment missing: `inline image`",
+        announceFailures,
+        maxAttachmentIssueMessages,
+        safeSendToChannel
+      );
+      return false;
+    }
+    candidatePath = materializedPath;
+  }
+  if (!isSupportedMediaPath(candidatePath)) {
     telemetry.skipped += 1;
+    attachmentLog("skip_unsupported_extension", {
+      routeId: tracker?.repoChannelId ?? tracker?.channel?.id ?? null,
+      itemType: itemType ?? null,
+      path: describeAttachmentInput(candidatePath)
+    });
     return false;
   }
-  if (/^https?:\/\//i.test(trimmed)) {
+  if (/^https?:\/\//i.test(candidatePath)) {
     telemetry.failed += 1;
+    attachmentLog("skip_remote_url", {
+      routeId: tracker?.repoChannelId ?? tracker?.channel?.id ?? null,
+      itemType: itemType ?? null,
+      path: describeAttachmentInput(candidatePath)
+    });
     await maybeSendAttachmentIssue(
       tracker,
-      `remote:${trimmed}`,
-      `Attachment skipped (remote URL not supported): \`${truncateStatusText(trimmed, 120)}\``,
+      `remote:${candidatePath}`,
+      `Attachment skipped (remote URL not supported): \`${truncateStatusText(candidatePath, 120)}\``,
       announceFailures,
       maxAttachmentIssueMessages,
       safeSendToChannel
@@ -383,13 +493,19 @@ async function sendAttachmentForPath(tracker, filePath, options = {}, context) {
   }
 
   const allowedRoots = resolveAttachmentRoots(tracker, attachmentRoots, imageCacheDir);
-  const resolvedInputPath = await resolveCandidatePath(trimmed, tracker, allowedRoots);
+  const resolvedInputPath = await resolveCandidatePath(candidatePath, tracker, allowedRoots);
   if (!resolvedInputPath) {
     telemetry.failed += 1;
+    attachmentLog("skip_unresolved", {
+      routeId: tracker?.repoChannelId ?? tracker?.channel?.id ?? null,
+      itemType: itemType ?? null,
+      path: describeAttachmentInput(candidatePath),
+      allowedRoots
+    });
     await maybeSendAttachmentIssue(
       tracker,
-      `missing:${trimmed}`,
-      `Attachment missing: \`${path.basename(trimmed)}\``,
+      `missing:${candidatePath}`,
+      `Attachment missing: \`${path.basename(candidatePath)}\``,
       announceFailures,
       maxAttachmentIssueMessages,
       safeSendToChannel
@@ -402,10 +518,16 @@ async function sendAttachmentForPath(tracker, filePath, options = {}, context) {
     realPath = await fs.realpath(resolvedInputPath);
   } catch {
     telemetry.failed += 1;
+    attachmentLog("skip_missing", {
+      routeId: tracker?.repoChannelId ?? tracker?.channel?.id ?? null,
+      itemType: itemType ?? null,
+      path: describeAttachmentInput(candidatePath),
+      resolvedInputPath
+    });
     await maybeSendAttachmentIssue(
       tracker,
       `missing:${resolvedInputPath}`,
-      `Attachment missing: \`${path.basename(trimmed)}\``,
+      `Attachment missing: \`${path.basename(candidatePath)}\``,
       announceFailures,
       maxAttachmentIssueMessages,
       safeSendToChannel
@@ -415,6 +537,13 @@ async function sendAttachmentForPath(tracker, filePath, options = {}, context) {
 
   if (!isPathWithinRoots(realPath, allowedRoots)) {
     telemetry.failed += 1;
+    attachmentLog("skip_outside_roots", {
+      routeId: tracker?.repoChannelId ?? tracker?.channel?.id ?? null,
+      itemType: itemType ?? null,
+      path: describeAttachmentInput(candidatePath),
+      realPath,
+      allowedRoots
+    });
     await maybeSendAttachmentIssue(
       tracker,
       `blocked:${realPath}`,
@@ -431,6 +560,12 @@ async function sendAttachmentForPath(tracker, filePath, options = {}, context) {
     stats = await fs.stat(realPath);
   } catch {
     telemetry.failed += 1;
+    attachmentLog("skip_unreadable", {
+      routeId: tracker?.repoChannelId ?? tracker?.channel?.id ?? null,
+      itemType: itemType ?? null,
+      path: describeAttachmentInput(candidatePath),
+      realPath
+    });
     await maybeSendAttachmentIssue(
       tracker,
       `unreadable:${realPath}`,
@@ -443,11 +578,23 @@ async function sendAttachmentForPath(tracker, filePath, options = {}, context) {
   }
   if (!stats.isFile()) {
     telemetry.skipped += 1;
+    attachmentLog("skip_not_file", {
+      routeId: tracker?.repoChannelId ?? tracker?.channel?.id ?? null,
+      itemType: itemType ?? null,
+      realPath
+    });
     return false;
   }
 
   if (stats.size > attachmentMaxBytes) {
     telemetry.failed += 1;
+    attachmentLog("skip_too_large", {
+      routeId: tracker?.repoChannelId ?? tracker?.channel?.id ?? null,
+      itemType: itemType ?? null,
+      realPath,
+      size: stats.size,
+      attachmentMaxBytes
+    });
     await maybeSendAttachmentIssue(
       tracker,
       `too-large:${realPath}:${stats.size}`,
@@ -462,6 +609,11 @@ async function sendAttachmentForPath(tracker, filePath, options = {}, context) {
   const key = realPath;
   if (tracker.sentAttachmentKeys?.has(key)) {
     telemetry.skipped += 1;
+    attachmentLog("skip_duplicate", {
+      routeId: tracker?.repoChannelId ?? tracker?.channel?.id ?? null,
+      itemType: itemType ?? null,
+      realPath
+    });
     return false;
   }
   tracker.sentAttachmentKeys?.add(key);
@@ -473,6 +625,13 @@ async function sendAttachmentForPath(tracker, filePath, options = {}, context) {
     files: [{ attachment: realPath, name: path.basename(realPath) }]
   });
   telemetry.uploaded += 1;
+  attachmentLog("upload_success", {
+    routeId: tracker?.repoChannelId ?? tracker?.channel?.id ?? null,
+    threadId: tracker?.threadId ?? null,
+    itemType: itemType ?? null,
+    realPath,
+    size: stats.size
+  });
   return true;
 }
 
@@ -524,6 +683,74 @@ function expandUserPath(inputPath) {
     }
   }
   return inputPath;
+}
+
+function isInlineDataImageUrl(value) {
+  return /^data:image\/[a-z0-9.+-]+(?:\+[a-z0-9.-]+)?;base64,/i.test(String(value ?? "").trim());
+}
+
+function describeAttachmentInput(value) {
+  const trimmed = String(value ?? "").trim();
+  if (!isInlineDataImageUrl(trimmed)) {
+    return trimmed;
+  }
+  const mimeMatch = /^data:(image\/[a-z0-9.+-]+(?:\+[a-z0-9.-]+)?);base64,/i.exec(trimmed);
+  const mimeType = String(mimeMatch?.[1] ?? "image/unknown").toLowerCase();
+  return `${mimeType};base64,<inline>`;
+}
+
+async function materializeInlineDataImage(dataUrl, imageCacheDir) {
+  const match = /^data:(image\/[a-z0-9.+-]+(?:\+[a-z0-9.-]+)?);base64,([a-z0-9+/=\s]+)$/i.exec(String(dataUrl ?? "").trim());
+  if (!match) {
+    return null;
+  }
+  const mimeType = String(match[1] ?? "").toLowerCase();
+  const base64Payload = String(match[2] ?? "").replace(/\s+/g, "");
+  if (!base64Payload) {
+    return null;
+  }
+
+  let bytes;
+  try {
+    bytes = Buffer.from(base64Payload, "base64");
+  } catch {
+    return null;
+  }
+  if (!bytes || bytes.length === 0) {
+    return null;
+  }
+
+  const ext = extensionForImageMimeType(mimeType);
+  const cacheRoot = path.resolve(typeof imageCacheDir === "string" && imageCacheDir.trim() ? imageCacheDir : "/tmp/agent-gateway-images");
+  await fs.mkdir(cacheRoot, { recursive: true });
+  const hash = createHash("sha256").update(`${mimeType}:${base64Payload}`).digest("hex").slice(0, 24);
+  const filePath = path.join(cacheRoot, `inline-${hash}.${ext}`);
+
+  try {
+    await fs.stat(filePath);
+    return filePath;
+  } catch {
+    // fall through and materialize the file
+  }
+
+  try {
+    await fs.writeFile(filePath, bytes);
+  } catch {
+    return null;
+  }
+  return filePath;
+}
+
+function extensionForImageMimeType(mimeType) {
+  const normalized = String(mimeType ?? "").toLowerCase();
+  if (normalized === "image/jpeg") {
+    return "jpg";
+  }
+  if (normalized === "image/svg+xml") {
+    return "svg";
+  }
+  const subtype = normalized.split("/")[1] ?? "png";
+  return subtype.split("+")[0] || "png";
 }
 
 async function findUniqueFileByBasename(roots, basename, options = {}) {

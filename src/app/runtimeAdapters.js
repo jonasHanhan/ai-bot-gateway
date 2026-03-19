@@ -9,6 +9,19 @@ export function createRuntimeAdapters(deps) {
     channelMessagingConfig
   } = deps;
 
+  function attachmentLog(event, details = {}) {
+    if (attachmentConfig.attachmentLogEnabled !== true) {
+      return;
+    }
+    let rendered = "";
+    try {
+      rendered = JSON.stringify(details);
+    } catch {
+      rendered = String(details);
+    }
+    console.log(rendered ? `[attachment][${event}] ${rendered}` : `[attachment][${event}]`);
+  }
+
   function getOptionalRuntime(name) {
     return runtimeContainer.getRef(name);
   }
@@ -135,7 +148,8 @@ export function createRuntimeAdapters(deps) {
       safeSendToChannel: channelMessagingConfig.safeSendToChannel,
       safeSendToChannelPayload: channelMessagingConfig.safeSendToChannelPayload,
       truncateStatusText: channelMessagingConfig.truncateStatusText,
-      maxAttachmentIssueMessages
+      maxAttachmentIssueMessages,
+      attachmentLog
     });
   }
 
@@ -149,7 +163,8 @@ export function createRuntimeAdapters(deps) {
         statusLabelForItemType: channelMessagingConfig.statusLabelForItemType,
         safeSendToChannel: channelMessagingConfig.safeSendToChannel,
         safeSendToChannelPayload: channelMessagingConfig.safeSendToChannelPayload,
-        truncateStatusText: channelMessagingConfig.truncateStatusText
+        truncateStatusText: channelMessagingConfig.truncateStatusText,
+        attachmentLog
       })) ?? 0
     );
   }

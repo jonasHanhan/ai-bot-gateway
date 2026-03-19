@@ -29,6 +29,7 @@ export async function buildRuntimeGraph(deps) {
     attachmentRoots,
     attachmentInferFromText,
     attachmentsEnabled,
+    attachmentLogEnabled,
     attachmentItemTypes,
     attachmentIssueLimitPerTurn,
     inFlightRecoveryPath,
@@ -97,6 +98,7 @@ export async function buildRuntimeGraph(deps) {
     sendChunkedToChannelFromRenderer,
     attachmentConfig: {
       attachmentsEnabled,
+      attachmentLogEnabled,
       attachmentItemTypes,
       attachmentMaxBytes,
       attachmentRoots,

@@ -98,10 +98,8 @@ export function createNotificationRuntime(deps) {
         recordFileChanges(tracker, item);
       }
 
-      if (state === "completed") {
-        if (item?.type === "imageView") {
-          await maybeSendAttachmentsForItem(tracker, item);
-        }
+      if (state === "completed" && item) {
+        await maybeSendAttachmentsForItem(tracker, item);
       }
 
       if (state === "started") {
@@ -455,7 +453,7 @@ export function createNotificationRuntime(deps) {
   }
 
   async function ensureThinkingStage(tracker) {
-    if (!tracker?.channel || !tracker?.statusMessageId || tracker?.hasToolCall) {
+    if (!tracker?.channel || !canEditTrackerStatusMessage(tracker) || tracker?.hasToolCall) {
       clearThinkingTicker(tracker);
       return;
     }
@@ -466,7 +464,7 @@ export function createNotificationRuntime(deps) {
       return;
     }
     const tick = async () => {
-      if (!tracker?.channel || !tracker?.statusMessageId || tracker?.hasToolCall) {
+      if (!tracker?.channel || !canEditTrackerStatusMessage(tracker) || tracker?.hasToolCall) {
         clearThinkingTicker(tracker);
         return;
       }
@@ -504,7 +502,7 @@ export function createNotificationRuntime(deps) {
     }
     const createPromise = (async () => {
       const elapsed = formatDuration(Date.now() - tracker.firstToolCallAt);
-      if (tracker.statusMessageId) {
+      if (canEditTrackerStatusMessage(tracker)) {
         const payload = `👷 Working (${elapsed})`;
         pushStatusLine(tracker, payload);
         await editTrackerMessage(tracker, buildTrackerMessageContent(tracker));
@@ -539,7 +537,7 @@ export function createNotificationRuntime(deps) {
       const firstToolAt = tracker.firstToolCallAt || Date.now();
       const elapsed = formatDuration(Date.now() - firstToolAt);
       const payload = `👷 Working (${elapsed})`;
-      if (tracker.statusMessageId) {
+      if (canEditTrackerStatusMessage(tracker)) {
         pushStatusLine(tracker, payload);
         await editTrackerMessage(tracker, buildTrackerMessageContent(tracker));
         tracker.workingLastRefreshAt = Date.now();
@@ -599,7 +597,7 @@ export function createNotificationRuntime(deps) {
     if (tracker.hasToolCall && tracker.firstToolCallAt) {
       tracker.lastToolCompletedAt = Date.now();
       const elapsed = formatDuration(tracker.lastToolCompletedAt - tracker.firstToolCallAt);
-      if (tracker.statusMessageId) {
+      if (canEditTrackerStatusMessage(tracker)) {
         pushStatusLine(tracker, `✅ Work complete (${elapsed})`);
         await editTrackerMessage(tracker, buildTrackerMessageContent(tracker));
         return;
@@ -689,6 +687,9 @@ export function createNotificationRuntime(deps) {
     if (!tracker?.channel) {
       return false;
     }
+    if (isFeishuTracker(tracker) && !feishuSegmentedStreaming) {
+      return false;
+    }
     if (tracker.seenDelta !== true) {
       return false;
     }
@@ -696,7 +697,11 @@ export function createNotificationRuntime(deps) {
   }
 
   function canInlineStreamTrackerOutput(tracker) {
-    return canStreamTrackerOutput(tracker) && !canSegmentStreamTrackerOutput(tracker) && Boolean(tracker?.statusMessageId);
+    return (
+      canStreamTrackerOutput(tracker) &&
+      !canSegmentStreamTrackerOutput(tracker) &&
+      canEditTrackerStatusMessage(tracker)
+    );
   }
 
   function canSegmentStreamTrackerOutput(tracker) {
@@ -838,7 +843,7 @@ export function createNotificationRuntime(deps) {
   }
 
   async function editTrackerMessage(tracker, content) {
-    if (!tracker?.channel || !content) {
+    if (!tracker?.channel || !content || !canEditTrackerStatusMessage(tracker)) {
       return;
     }
     if (tracker.lastRenderedContent === content) {
@@ -921,6 +926,19 @@ export function createNotificationRuntime(deps) {
       return `${minutes}m ${seconds}s`;
     }
     return `${seconds}s`;
+  }
+
+  function canEditTrackerStatusMessage(tracker) {
+    if (!tracker?.statusMessageId) {
+      return false;
+    }
+    if (tracker?.statusMessage?.supportsEdits === false) {
+      return false;
+    }
+    if (tracker?.channel?.supportsMessageEdits === false) {
+      return false;
+    }
+    return !isFeishuTracker(tracker);
   }
 
   return {

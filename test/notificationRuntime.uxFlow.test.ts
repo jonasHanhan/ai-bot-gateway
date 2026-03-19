@@ -6,6 +6,7 @@ type TurnTracker = {
   repoChannelId: string;
   channel: {
     platform?: string;
+    supportsMessageEdits?: boolean;
     isTextBased: () => boolean;
     messages: {
       fetch: () => Promise<null>;
@@ -14,8 +15,10 @@ type TurnTracker = {
   statusMessage: {
     id: string;
     platform?: string;
+    supportsEdits?: boolean;
     channel: {
       platform?: string;
+      supportsMessageEdits?: boolean;
       isTextBased: () => boolean;
       messages: {
         fetch: () => Promise<null>;
@@ -71,6 +74,7 @@ function createTracker(options: { platform?: string } = {}) {
   const platform = options.platform ?? "discord";
   const channel = {
     platform,
+    supportsMessageEdits: platform !== "feishu",
     isTextBased: () => true,
     messages: {
       fetch: async () => null
@@ -83,6 +87,7 @@ function createTracker(options: { platform?: string } = {}) {
     statusMessage: {
       id: "thinking-1",
       platform,
+      supportsEdits: platform !== "feishu",
       channel,
       edit: async (text: string) => {
         sentEdits.push(text);
@@ -223,7 +228,7 @@ describe("notification runtime ux flow cutover", () => {
     expect(sentMessages.some((line) => line.startsWith("🖼️ Image:"))).toBe(false);
     expect(chunkedMessages).toContain("Summary complete with image /tmp/final.png");
     expect(chunkedMessages).toContain("```ansi\n+2 -1\n```");
-    expect(itemAttachmentCalls).toEqual([]);
+    expect(itemAttachmentCalls).toEqual(["commandExecution"]);
     expect(inferredAttachmentTexts).toEqual(["Summary complete with image /tmp/final.png"]);
     expect(tracker.hasSummaryImageAttachment).toBe(true);
   });
@@ -914,6 +919,70 @@ describe("notification runtime ux flow cutover", () => {
     expect(chunkedMessages).toEqual(["Feishu dropped segment."]);
   });
 
+  test("sends Feishu final summary as a new message when status edits are unsupported", async () => {
+    const activeTurns = new Map<string, TurnTracker>();
+    const tracker = createTracker({ platform: "feishu" });
+    activeTurns.set("thread-1", tracker);
+    const statusEdits: string[] = [];
+    const chunkedMessages: string[] = [];
+    tracker.statusMessage.edit = async (text: string) => {
+      statusEdits.push(text);
+    };
+
+    const runtime = createNotificationRuntime({
+      activeTurns,
+      renderVerbosity: "user",
+      TURN_PHASE: {
+        RUNNING: "running",
+        RECONNECTING: "reconnecting",
+        FINALIZING: "finalizing",
+        FAILED: "failed",
+        DONE: "done"
+      },
+      transitionTurnPhase: () => true,
+      normalizeCodexNotification: (notification: CodexNotification) => {
+        const { method, params } = notification;
+        if (method === "turn/completed") {
+          return { kind: "turn_completed", threadId: params.threadId };
+        }
+        return { kind: "unknown" };
+      },
+      extractAgentMessageText: () => "",
+      maybeSendAttachmentsForItem: async () => {},
+      maybeSendInferredAttachmentsFromText: async () => 0,
+      recordFileChanges: () => {},
+      summarizeItemForStatus: () => [],
+      extractWebSearchDetails: () => [],
+      buildFileDiffSection: () => "",
+      buildTurnRenderPlan: () => ({ primaryMessage: "", statusMessages: [], attachments: [] }),
+      sendChunkedToChannel: async (_channel: unknown, text: string) => {
+        chunkedMessages.push(text);
+      },
+      normalizeFinalSummaryText: (text: string) => text.trim(),
+      truncateStatusText: (text: string) => text,
+      isTransientReconnectErrorMessage: () => false,
+      safeSendToChannel: async () => null,
+      truncateForDiscordMessage: (text: string) => text,
+      discordMaxMessageLength: 1900,
+      debugLog: () => {},
+      writeHeartbeatFile: async () => {},
+      onTurnFinalized: async () => {},
+      turnCompletionQuietMs: 5,
+      turnCompletionMaxWaitMs: 100
+    });
+
+    tracker.fullText = "Feishu final summary";
+    tracker.seenDelta = true;
+    await runtime.handleNotification({
+      method: "turn/completed",
+      params: { threadId: "thread-1" }
+    });
+    await new Promise((resolve) => setTimeout(resolve, 40));
+
+    expect(statusEdits).toEqual([]);
+    expect(chunkedMessages).toEqual(["Feishu final summary"]);
+  });
+
   test("stops thinking timer once tool work begins", async () => {
     const activeTurns = new Map<string, TurnTracker>();
     const tracker = createTracker();
@@ -1031,6 +1100,63 @@ describe("notification runtime ux flow cutover", () => {
     });
     expect(itemAttachmentCalls).toEqual(["imageView"]);
     expect((tracker as TurnTracker & { pendingAttachmentPaths?: Set<string> }).pendingAttachmentPaths).toBeUndefined();
+  });
+
+  test("passes completed mcp tool results through attachment sender", async () => {
+    const activeTurns = new Map<string, TurnTracker>();
+    const tracker = createTracker();
+    activeTurns.set("thread-1", tracker);
+    const itemAttachmentCalls: string[] = [];
+
+    const runtime = createNotificationRuntime({
+      activeTurns,
+      renderVerbosity: "user",
+      TURN_PHASE: {
+        RUNNING: "running",
+        RECONNECTING: "reconnecting",
+        FINALIZING: "finalizing",
+        FAILED: "failed",
+        DONE: "done"
+      },
+      transitionTurnPhase: () => true,
+      normalizeCodexNotification: (notification: CodexNotification) => {
+        const { method, params } = notification;
+        if (method === "item/completed") {
+          return { kind: "item_lifecycle", threadId: params.threadId, item: params.item, state: "completed" };
+        }
+        return { kind: "unknown" };
+      },
+      extractAgentMessageText: () => "",
+      maybeSendAttachmentsForItem: async (_tracker: unknown, item: { type?: string }) => {
+        itemAttachmentCalls.push(String(item?.type ?? ""));
+      },
+      maybeSendInferredAttachmentsFromText: async () => 0,
+      recordFileChanges: () => {},
+      summarizeItemForStatus: () => [],
+      extractWebSearchDetails: () => [],
+      buildFileDiffSection: () => "",
+      buildTurnRenderPlan: () => ({ primaryMessage: "", statusMessages: [], attachments: [] }),
+      sendChunkedToChannel: async () => {},
+      normalizeFinalSummaryText: (text: string) => text.trim(),
+      truncateStatusText: (text: string) => text,
+      isTransientReconnectErrorMessage: () => false,
+      safeSendToChannel: async () => null,
+      truncateForDiscordMessage: (text: string) => text,
+      discordMaxMessageLength: 1900,
+      debugLog: () => {},
+      writeHeartbeatFile: async () => {},
+      onTurnFinalized: async () => {}
+    });
+
+    await runtime.handleNotification({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        item: { id: "tool-1", type: "mcpToolCall", path: "/tmp/google-home.png" }
+      }
+    });
+
+    expect(itemAttachmentCalls).toEqual(["mcpToolCall"]);
   });
 
   test("clears thinking ticker at finalize start before summary send", async () => {

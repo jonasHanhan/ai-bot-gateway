@@ -59,6 +59,7 @@ export function loadRuntimeEnv() {
   ];
   const attachmentInferFromText = process.env.DISCORD_ATTACHMENT_INFER_FROM_TEXT === "1";
   const attachmentsEnabled = process.env.DISCORD_ENABLE_ATTACHMENTS !== "0";
+  const attachmentLogEnabled = process.env.DISCORD_LOG_ATTACHMENTS === "1";
   const attachmentItemTypes = parseAttachmentItemTypes(process.env.DISCORD_ATTACHMENT_ITEM_TYPES);
   const renderVerbosity = normalizeRenderVerbosity(process.env.DISCORD_RENDER_VERBOSITY);
   const stripAnsiForDiscord = process.env.DISCORD_STRIP_ANSI_OUTPUT === "1";
@@ -126,6 +127,7 @@ export function loadRuntimeEnv() {
     attachmentRoots,
     attachmentInferFromText,
     attachmentsEnabled,
+    attachmentLogEnabled,
     attachmentItemTypes,
     attachmentIssueLimitPerTurn,
     renderVerbosity,

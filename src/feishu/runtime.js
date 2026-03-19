@@ -633,6 +633,7 @@ export function createFeishuRuntime(deps) {
       id: routeId,
       chatId,
       platform: "feishu",
+      supportsMessageEdits: false,
       bridgeMeta: {
         mode: isWritable ? "repo" : "general",
         bindingKind,
@@ -717,12 +718,12 @@ export function createFeishuRuntime(deps) {
     const sent = {
       id: messageId,
       platform: "feishu",
+      supportsEdits: false,
       content: normalizedText,
       channel,
       channelId: channel.id,
       async edit(payload) {
-        this.content = extractOutgoingText(payload);
-        return this;
+        throw new Error("Feishu message editing is not supported");
       }
     };
     sentMessages.set(messageId, sent);
@@ -788,12 +789,12 @@ export function createFeishuRuntime(deps) {
     const sent = {
       id: messageId,
       platform: "feishu",
+      supportsEdits: false,
       content: msgType === "text" ? String(content?.text ?? "").trim() : JSON.stringify(content),
       channel,
       channelId: channel.id,
       async edit(payload) {
-        this.content = extractOutgoingText(payload);
-        return this;
+        throw new Error("Feishu message editing is not supported");
       }
     };
     sentMessages.set(messageId, sent);

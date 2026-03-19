@@ -154,6 +154,56 @@ describe("attachments integration smoke", () => {
     expect(String(sentPayloads[0]?.content ?? "")).not.toContain("one.png");
   });
 
+  test("uploads inline data-url images from structured tool output", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-bridge-inline-attach-"));
+    tempDirs.push(tmpDir);
+    const realTmpDir = await fs.realpath(tmpDir);
+    const sentPayloads: Array<Record<string, unknown>> = [];
+    const tracker = {
+      channel: { id: "channel-inline" },
+      cwd: realTmpDir,
+      sentAttachmentKeys: new Set<string>(),
+      seenAttachmentIssueKeys: new Set<string>(),
+      attachmentIssueCount: 0
+    };
+    const dataUrl = `data:image/png;base64,${Buffer.from("inline-image-bytes").toString("base64")}`;
+
+    await maybeSendAttachmentsForItem(
+      tracker,
+      {
+        type: "mcpToolCall",
+        id: "item-inline",
+        output: [
+          { type: "input_text", text: "Took a screenshot of the full current page." },
+          { type: "input_image", image_url: dataUrl }
+        ]
+      },
+      {
+        attachmentsEnabled: true,
+        attachmentItemTypes: new Set(["mcpToolCall"]),
+        attachmentMaxBytes: 8 * 1024 * 1024,
+        attachmentRoots: [realTmpDir],
+        imageCacheDir: realTmpDir,
+        attachmentInferFromText: false,
+        statusLabelForItemType: () => "browser tool",
+        safeSendToChannel: async () => null,
+        safeSendToChannelPayload: async (_channel: unknown, payload: Record<string, unknown>) => {
+          sentPayloads.push(payload);
+          return null;
+        },
+        truncateStatusText: (text: string) => text,
+        maxAttachmentIssueMessages: 1
+      }
+    );
+
+    expect(sentPayloads.length).toBe(1);
+    const files = sentPayloads[0]?.files;
+    expect(Array.isArray(files)).toBe(true);
+    const firstFile = Array.isArray(files) ? files[0] : null;
+    expect(String(firstFile?.name ?? "")).toMatch(/^inline-[a-f0-9]{24}\.png$/);
+    expect(await fs.readFile(String(firstFile?.attachment ?? ""), "utf8")).toBe("inline-image-bytes");
+  });
+
   test("suppresses attachment issue notices when max issue messages is zero", async () => {
     const issueMessages: string[] = [];
     const tracker = {

@@ -1573,6 +1573,64 @@ describe("feishu runtime", () => {
     expect(sentBodies[0]?.content).not.toContain("[31m");
   });
 
+  test("marks outbound Feishu messages as non-editable", async () => {
+    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/tenant_access_token/internal")) {
+        return new Response(JSON.stringify({ code: 0, tenant_access_token: "tenant-token", expire: 7200 }), {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        });
+      }
+      if (url.includes("/open-apis/im/v1/messages?receive_id_type=chat_id")) {
+        return new Response(JSON.stringify({ code: 0, data: { message_id: "om_outbound_edit_1" } }), {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        });
+      }
+      throw new Error(`unexpected fetch ${url} ${(init?.method ?? "GET").toString()}`);
+    };
+
+    const runtime = createFeishuRuntime({
+      config: {
+        defaultModel: "gpt-5.3-codex",
+        sandboxMode: "workspace-write",
+        allowedFeishuUserIds: []
+      },
+      runtimeEnv: {
+        feishuEnabled: true,
+        feishuAppId: "cli_test",
+        feishuAppSecret: "secret",
+        feishuVerificationToken: "",
+        feishuTransport: "long-connection",
+        feishuPort: 8788,
+        feishuHost: "127.0.0.1",
+        feishuWebhookPath: "/feishu/events",
+        feishuGeneralChatId: "",
+        feishuGeneralCwd: "/tmp/general",
+        feishuRequireMentionInGroup: false
+      },
+      getChannelSetups: () => ({}),
+      runManagedRouteCommand: async () => {},
+      getHelpText: () => "help text",
+      isCommandSupportedForPlatform: () => false,
+      handleCommand: async () => {},
+      runtimeAdapters: {
+        buildTurnInputFromMessage: async () => [],
+        enqueuePrompt: () => {}
+      },
+      safeReply: async () => null
+    });
+
+    const channel = await runtime.fetchChannelByRouteId("feishu:oc_outbound_edit_1");
+    expect(channel).toBeTruthy();
+    expect(channel?.supportsMessageEdits).toBe(false);
+
+    const sentMessage = await channel?.send("hello");
+    expect(sentMessage?.supportsEdits).toBe(false);
+    await expect(sentMessage?.edit("updated")).rejects.toThrow("Feishu message editing is not supported");
+  });
+
   test("invites current app bot into target chat via /joinbot", async () => {
     const invitedChats: Array<{ url: string; body: { id_list?: string[] } }> = [];
     const replies: string[] = [];
