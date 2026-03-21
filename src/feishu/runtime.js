@@ -1407,20 +1407,44 @@ function shouldRenderMarkdownAsInteractiveCard(text) {
 }
 
 function buildMarkdownInteractiveCard(text) {
+  const headerTitle = buildInteractiveCardTitle(text);
   return {
     config: {
       wide_screen_mode: true
     },
+    header: {
+      template: "blue",
+      title: {
+        tag: "plain_text",
+        content: headerTitle
+      }
+    },
     elements: [
       {
-        tag: "div",
-        text: {
-          tag: "lark_md",
-          content: text
-        }
+        tag: "markdown",
+        content: text
       }
     ]
   };
+}
+
+function buildInteractiveCardTitle(text) {
+  const lines = String(text ?? "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const firstLine = lines[0] ?? "";
+  const normalized = firstLine
+    .replace(/^#{1,6}\s+/, "")
+    .replace(/^>\s+/, "")
+    .replace(/^[-*+]\s+/, "")
+    .replace(/^\d+\.\s+/, "")
+    .replace(/[*_~`[\]()]/g, "")
+    .trim();
+  if (!normalized) {
+    return "Agent Gateway";
+  }
+  return normalized.slice(0, 60);
 }
 
 function extractTextMessageContent(rawContent, messageType = "text") {

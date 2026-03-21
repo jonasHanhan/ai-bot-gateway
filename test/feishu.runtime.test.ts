@@ -1590,9 +1590,10 @@ describe("feishu runtime", () => {
     expect(sentBodies).toHaveLength(1);
     expect(sentBodies[0]?.msgType).toBe("interactive");
     const card = JSON.parse(String(sentBodies[0]?.content ?? "{}"));
-    expect(card?.elements?.[0]?.text?.tag).toBe("lark_md");
-    expect(card?.elements?.[0]?.text?.content).toContain("**系统**");
-    expect(card?.elements?.[0]?.text?.content).toContain("- CPU 正常");
+    expect(card?.header?.title?.tag).toBe("plain_text");
+    expect(card?.elements?.[0]?.tag).toBe("markdown");
+    expect(card?.elements?.[0]?.content).toContain("**系统**");
+    expect(card?.elements?.[0]?.content).toContain("- CPU 正常");
   });
 
   test("renders markdown replies with payload.content as Feishu interactive cards", async () => {
@@ -1657,7 +1658,8 @@ describe("feishu runtime", () => {
     expect(sentBodies).toHaveLength(2);
     expect(sentBodies[0]?.msgType).toBe("interactive");
     const card = JSON.parse(String(sentBodies[0]?.content ?? "{}"));
-    expect(card?.elements?.[0]?.text?.content).toContain("**磁盘**");
+    expect(card?.elements?.[0]?.tag).toBe("markdown");
+    expect(card?.elements?.[0]?.content).toContain("**磁盘**");
     expect(sentBodies[1]?.msgType).toBe("text");
     expect(sentBodies[1]?.content).toContain("Unsupported outbound attachments on Feishu");
   });
@@ -1876,7 +1878,7 @@ describe("feishu runtime", () => {
     expect(sentBodies).toHaveLength(1);
     expect(sentBodies[0]?.msgType).toBe("interactive");
     const card = JSON.parse(String(sentBodies[0]?.content ?? "{}"));
-    const markdown = String(card?.elements?.[0]?.text?.content ?? "");
+    const markdown = String(card?.elements?.[0]?.content ?? "");
     expect(markdown).not.toContain("\\u001b");
     expect(markdown).toContain("+12");
     expect(markdown).toContain("-3");
