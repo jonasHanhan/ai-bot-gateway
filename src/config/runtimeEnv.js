@@ -106,6 +106,15 @@ export function loadRuntimeEnv() {
   const feishuSegmentedStreaming = process.env.FEISHU_SEGMENTED_STREAMING === "1";
   const feishuUnboundChatMode = normalizeFeishuUnboundChatMode(process.env.FEISHU_UNBOUND_CHAT_MODE);
   const feishuUnboundChatCwd = path.resolve(process.env.FEISHU_UNBOUND_CHAT_CWD ?? repoRootEnv ?? process.cwd());
+  const feishuStatusReactions =
+    process.env.FEISHU_STATUS_REACTIONS === "1"
+      ? {
+          running: String(process.env.FEISHU_REACTION_RUNNING ?? "").trim(),
+          working: String(process.env.FEISHU_REACTION_WORKING ?? "").trim(),
+          done: String(process.env.FEISHU_REACTION_DONE ?? "").trim(),
+          error: String(process.env.FEISHU_REACTION_ERROR ?? "").trim()
+        }
+      : null;
 
   return {
     configPath,
@@ -168,6 +177,7 @@ export function loadRuntimeEnv() {
     feishuEventDedupeTtlMs,
     feishuEventDedupePath,
     feishuUnboundChatMode,
-    feishuUnboundChatCwd
+    feishuUnboundChatCwd,
+    feishuStatusReactions
   };
 }

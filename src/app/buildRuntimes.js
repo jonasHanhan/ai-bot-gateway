@@ -2,22 +2,17 @@ import { buildCommandRuntime } from "./buildCommandRuntime.js";
 import { buildBackendRuntime } from "./buildBackendRuntime.js";
 import { buildNotificationRuntime } from "./buildNotificationRuntime.js";
 import { buildApprovalRuntime } from "./buildApprovalRuntime.js";
-import { buildDiscordRuntime } from "./buildDiscordRuntime.js";
-import { buildFeishuRuntime } from "./buildFeishuRuntime.js";
 import { createPlatformRegistry } from "../platforms/platformRegistry.js";
-import { createDiscordPlatform } from "../platforms/discordPlatform.js";
-import { createFeishuPlatform } from "../platforms/feishuPlatform.js";
+import { DISCORD_CHANNEL_TYPES, DISCORD_MESSAGE_FLAGS } from "../discord/constants.js";
 
-export function buildBridgeRuntimes(deps) {
+export async function buildBridgeRuntimes(deps) {
   const {
-    platformTypes,
     runtimeContext,
     runtimeEnv,
     runtimeServices,
     channelSetupStore,
     ioRuntime
   } = deps;
-  const { ChannelType, MessageFlags } = platformTypes;
   const {
     path,
     fs,
@@ -69,13 +64,15 @@ export function buildBridgeRuntimes(deps) {
     feishuSegmentedStreaming,
     feishuStreamMinChars,
     feishuEventDedupeTtlMs,
-    feishuEventDedupePath
+    feishuEventDedupePath,
+    feishuStatusReactions
   } = runtimeEnv;
   const { getChannelSetups, setChannelSetups } = channelSetupStore;
   const {
     runtimeAdapters,
     safeReply,
     safeSendToChannel,
+    safeAddReaction,
     debugLog,
     turnRecoveryStore,
     createApprovalToken,
@@ -98,7 +95,7 @@ export function buildBridgeRuntimes(deps) {
     handleBindCommand,
     handleUnbindCommand
   } = buildCommandRuntime({
-    ChannelType,
+    ChannelType: DISCORD_CHANNEL_TYPES,
     path,
     fs,
     execFileAsync,
@@ -133,6 +130,8 @@ export function buildBridgeRuntimes(deps) {
     feishuStreamMinChars,
     runtimeAdapters,
     safeSendToChannel,
+    safeAddReaction,
+    feishuStatusReactions,
     debugLog,
     turnRecoveryStore,
     sendChunkedToChannel,
@@ -149,77 +148,96 @@ export function buildBridgeRuntimes(deps) {
     fetchChannelByRouteId
   });
 
-  const discordRuntime = buildDiscordRuntime({
-    ChannelType,
-    MessageFlags,
-    discord,
-    config,
-    generalChannelId,
-    generalChannelName,
-    generalChannelCwd,
-    getChannelSetups,
-    projectsCategoryName,
-    managedChannelTopicPrefix,
-    runManagedRouteCommand,
-    runtimeAdapters,
-    getHelpText,
-    isCommandSupportedForPlatform,
-    handleCommand,
-    handleInitRepoCommand,
-    handleSetPathCommand,
-    handleMakeChannelCommand,
-    handleBindCommand,
-    handleUnbindCommand,
-    approvalButtonPrefix,
-    pendingApprovals,
-    safeReply
-  });
+  let discordRuntime = createDisabledDiscordRuntime();
+  let feishuRuntime = createDisabledFeishuRuntime({ feishuTransport, feishuWebhookPath });
+  const platforms = [];
 
-  const feishuRuntime = buildFeishuRuntime({
-    config,
-    runtimeEnv: {
-      feishuEnabled,
-      feishuAppId,
-      feishuAppSecret,
-      feishuVerificationToken,
-      feishuTransport,
-      feishuPort,
-      feishuHost,
-      feishuWebhookPath,
-      imageCacheDir,
-      feishuGeneralChatId,
-      feishuGeneralCwd,
-      feishuUnboundChatMode,
-      feishuUnboundChatCwd,
-      feishuRequireMentionInGroup,
-      feishuSegmentedStreaming,
-      feishuStreamMinChars,
-      feishuEventDedupeTtlMs,
-      feishuEventDedupePath
-    },
-    getChannelSetups,
-    bootstrapChannelMappings,
-    runManagedRouteCommand,
-    getHelpText,
-    isCommandSupportedForPlatform,
-    handleCommand,
-    handleSetPathCommand,
-    runtimeAdapters,
-    safeReply
-  });
-
-  platformRegistry = createPlatformRegistry([
-    createDiscordPlatform({
+  if (discordToken) {
+    const [{ buildDiscordRuntime }, { createDiscordPlatform }] = await Promise.all([
+      import("./buildDiscordRuntime.js"),
+      import("../platforms/discordPlatform.js")
+    ]);
+    discordRuntime = buildDiscordRuntime({
+      ChannelType: DISCORD_CHANNEL_TYPES,
+      MessageFlags: DISCORD_MESSAGE_FLAGS,
       discord,
-      discordToken,
-      waitForDiscordReady,
-      runtime: discordRuntime,
-      bootstrapChannelMappings
-    }),
-    createFeishuPlatform({
-      runtime: feishuRuntime
-    })
-  ]);
+      config,
+      generalChannelId,
+      generalChannelName,
+      generalChannelCwd,
+      getChannelSetups,
+      projectsCategoryName,
+      managedChannelTopicPrefix,
+      runManagedRouteCommand,
+      runtimeAdapters,
+      getHelpText,
+      isCommandSupportedForPlatform,
+      handleCommand,
+      handleInitRepoCommand,
+      handleSetPathCommand,
+      handleMakeChannelCommand,
+      handleBindCommand,
+      handleUnbindCommand,
+      approvalButtonPrefix,
+      pendingApprovals,
+      safeReply
+    });
+    platforms.push(
+      createDiscordPlatform({
+        discord,
+        discordToken,
+        waitForDiscordReady,
+        runtime: discordRuntime,
+        bootstrapChannelMappings
+      })
+    );
+  }
+
+  if (feishuEnabled) {
+    const [{ buildFeishuRuntime }, { createFeishuPlatform }] = await Promise.all([
+      import("./buildFeishuRuntime.js"),
+      import("../platforms/feishuPlatform.js")
+    ]);
+    feishuRuntime = buildFeishuRuntime({
+      config,
+      runtimeEnv: {
+        feishuEnabled,
+        feishuAppId,
+        feishuAppSecret,
+        feishuVerificationToken,
+        feishuTransport,
+        feishuPort,
+        feishuHost,
+        feishuWebhookPath,
+        imageCacheDir,
+        feishuGeneralChatId,
+        feishuGeneralCwd,
+        feishuUnboundChatMode,
+        feishuUnboundChatCwd,
+        feishuRequireMentionInGroup,
+        feishuSegmentedStreaming,
+        feishuStreamMinChars,
+        feishuEventDedupeTtlMs,
+        feishuEventDedupePath
+      },
+      getChannelSetups,
+      bootstrapChannelMappings,
+      runManagedRouteCommand,
+      getHelpText,
+      isCommandSupportedForPlatform,
+      handleCommand,
+      handleSetPathCommand,
+      runtimeAdapters,
+      safeReply
+    });
+    platforms.push(
+      createFeishuPlatform({
+        runtime: feishuRuntime
+      })
+    );
+  }
+
+  platformRegistry = createPlatformRegistry(platforms);
 
   const backendRuntime = buildBackendRuntime({
     enabled: backendHttpEnabled,
@@ -241,5 +259,26 @@ export function buildBridgeRuntimes(deps) {
     notificationRuntime,
     serverRequestRuntime,
     discordRuntime
+  };
+}
+
+function createDisabledDiscordRuntime() {
+  return {
+    handleMessage: async () => {},
+    handleInteraction: async () => {},
+    handleChannelCreate: async () => {},
+    registerSlashCommands: async () => null
+  };
+}
+
+function createDisabledFeishuRuntime({ feishuTransport = null, feishuWebhookPath = "" } = {}) {
+  return {
+    enabled: false,
+    transport: feishuTransport,
+    webhookPath: feishuWebhookPath,
+    fetchChannelByRouteId: async () => null,
+    handleHttpRequest: async () => {},
+    start: async () => ({ started: false }),
+    stop: async () => ({ platformId: "feishu", stopped: false })
   };
 }

@@ -18,6 +18,8 @@ export function createNotificationRuntime(deps) {
     truncateStatusText,
     isTransientReconnectErrorMessage,
     safeSendToChannel,
+    safeAddReaction = async () => null,
+    feishuStatusReactions = null,
     truncateForDiscordMessage,
     discordMaxMessageLength = 1900,
     feishuMaxMessageLength = 8000,
@@ -57,6 +59,7 @@ export function createNotificationRuntime(deps) {
         deltaLength: delta.length
       });
       appendTrackerText(tracker, delta, { fromDelta: true });
+      await maybeApplyStatusReaction(tracker, "running");
       return;
     }
 
@@ -76,6 +79,8 @@ export function createNotificationRuntime(deps) {
       if (isToolCallItemType(item?.type)) {
         noteToolCallObserved(tracker);
         await ensureWorkingStage(tracker);
+      } else if (state === "started") {
+        await maybeApplyStatusReaction(tracker, "running");
       }
       await ensureThinkingStage(tracker);
       if (state === "started") {
@@ -243,6 +248,7 @@ export function createNotificationRuntime(deps) {
         } else {
           pushStatusLine(tracker, `❌ Error: ${truncateStatusText(finalError.message, 220)}`);
         }
+        await maybeApplyStatusReaction(tracker, "error");
         await safeSendToChannel(tracker.channel, `❌ Error: ${truncateStatusText(finalError.message, 220)}`).catch((sendError) => {
           console.error(`failed to send turn error for ${threadId}: ${formatErrorMessage(sendError)}`);
         });
@@ -252,6 +258,7 @@ export function createNotificationRuntime(deps) {
       tracker.completed = true;
       transitionTurnPhase(tracker, TURN_PHASE.DONE);
       await finalizeUxFlowStages(tracker);
+      await maybeApplyStatusReaction(tracker, "done");
 
       tracker.fullText = normalizeFinalSummaryText(tracker.fullText);
       const summaryTextForDiscord = sanitizeSummaryForDiscord(tracker.fullText);
@@ -321,6 +328,34 @@ export function createNotificationRuntime(deps) {
       return;
     }
     tracker.lastTurnActivityAt = Date.now();
+  }
+
+  async function maybeApplyStatusReaction(tracker, reactionKey) {
+    if (!tracker || !isFeishuTracker(tracker) || !tracker.statusMessage) {
+      return;
+    }
+    const emojiType = resolveFeishuStatusReaction(reactionKey);
+    if (!emojiType) {
+      return;
+    }
+    if (tracker.lastStatusReactionKey === reactionKey) {
+      return;
+    }
+    const result = await safeAddReaction(tracker.statusMessage, {
+      key: reactionKey,
+      emojiType
+    });
+    if (result) {
+      tracker.lastStatusReactionKey = reactionKey;
+    }
+  }
+
+  function resolveFeishuStatusReaction(reactionKey) {
+    if (!feishuStatusReactions || typeof feishuStatusReactions !== "object") {
+      return "";
+    }
+    const candidate = feishuStatusReactions[reactionKey];
+    return typeof candidate === "string" ? candidate.trim() : "";
   }
 
   function noteToolCallObserved(tracker) {
@@ -501,6 +536,7 @@ export function createNotificationRuntime(deps) {
       tracker.firstToolCallAt = Date.now();
     }
     const createPromise = (async () => {
+      void maybeApplyStatusReaction(tracker, "working");
       const elapsed = formatDuration(Date.now() - tracker.firstToolCallAt);
       if (canEditTrackerStatusMessage(tracker)) {
         const payload = `👷 Working (${elapsed})`;

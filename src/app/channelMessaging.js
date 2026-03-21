@@ -59,6 +59,29 @@ export function createChannelMessaging(deps) {
     }
   }
 
+  async function safeAddReaction(message, reaction) {
+    if (!message) {
+      return null;
+    }
+    try {
+      if (typeof message.react === "function") {
+        return await message.react(reaction);
+      }
+      const channel =
+        (message?.channel?.isTextBased?.() ? message.channel : null) ??
+        (message?.channelId ? await fetchChannelByRouteId(message.channelId).catch(() => null) : null);
+      if (channel?.messages && typeof channel.messages.react === "function" && message?.id) {
+        return await channel.messages.react(message.id, reaction);
+      }
+      return null;
+    } catch (error) {
+      if (!isChannelUnavailableError(error)) {
+        console.warn(`reaction dropped for message ${message?.id ?? "(unknown)"}: ${String(error?.message ?? error)}`);
+      }
+      return null;
+    }
+  }
+
   function resolvePlatform(message, channel) {
     const platform = String(channel?.platform ?? message?.platform ?? "").trim().toLowerCase();
     if (platform) {
@@ -101,7 +124,8 @@ export function createChannelMessaging(deps) {
   return {
     safeReply,
     safeSendToChannel,
-    safeSendToChannelPayload
+    safeSendToChannelPayload,
+    safeAddReaction
   };
 }
 

@@ -25,19 +25,23 @@ export interface LaunchdServiceInfo {
   domain: string;
   serviceTarget: string;
   runtimeRoot: string;
+  managedRuntimeRoot: string;
   sourceWrapperPath: string;
   supportRoot: string;
   managedWrapperPath: string;
   managedSupervisorPath: string;
+  sourceLogWriterPath: string;
+  managedLogWriterPath: string;
   sourceSupervisorPath: string;
   nodeBinaryPath: string;
   entryScriptPath: string;
+  managedEntryScriptPath: string;
   stdoutLogPath: string;
   stderrLogPath: string;
 }
 
 export function resolveCliRuntimePaths(cwd: string): CliRuntimePaths {
-  const runtimeRoot = resolveRuntimeRoot(cwd);
+  const runtimeRoot = resolveCliRuntimeRoot(cwd);
   const plistLogPaths = readLaunchdLogPaths(runtimeRoot);
   const stdoutLogPath = resolveLogPath(
     process.env.DISCORD_STDOUT_LOG_PATH,
@@ -84,11 +88,15 @@ export function resolveLaunchdServiceInfo(cwd: string): LaunchdServiceInfo {
   const domain = `gui/${uid}`;
   const sourceWrapperPath = path.resolve(runtimeRoot, "scripts/launchd-wrapper.sh");
   const supportRoot = path.resolve(resolveHomeDirectory(), "Library/Application Support/AgentGateway", label);
+  const managedRuntimeRoot = path.resolve(supportRoot, "runtime");
   const managedWrapperPath = path.resolve(supportRoot, "launchd-wrapper.sh");
   const managedSupervisorPath = path.resolve(supportRoot, "restart-supervisor.sh");
+  const sourceLogWriterPath = path.resolve(runtimeRoot, "scripts/log-rotating-writer.sh");
+  const managedLogWriterPath = path.resolve(supportRoot, "log-rotating-writer.sh");
   const sourceSupervisorPath = path.resolve(runtimeRoot, "scripts/restart-supervisor.sh");
   const nodeBinaryPath = resolveNodeBinaryPath();
   const entryScriptPath = path.resolve(runtimeRoot, "scripts/start-with-proxy.mjs");
+  const managedEntryScriptPath = path.resolve(managedRuntimeRoot, "scripts/start-with-proxy.mjs");
   const plistLogPaths = readLaunchdLogPaths(runtimeRoot);
   const stdoutLogPath = resolveLogPath(
     process.env.DISCORD_STDOUT_LOG_PATH,
@@ -107,13 +115,17 @@ export function resolveLaunchdServiceInfo(cwd: string): LaunchdServiceInfo {
     domain,
     serviceTarget: `${domain}/${label}`,
     runtimeRoot,
+    managedRuntimeRoot,
     sourceWrapperPath,
     supportRoot,
     managedWrapperPath,
     managedSupervisorPath,
+    sourceLogWriterPath,
+    managedLogWriterPath,
     sourceSupervisorPath,
     nodeBinaryPath,
     entryScriptPath,
+    managedEntryScriptPath,
     stdoutLogPath,
     stderrLogPath
   };
@@ -137,6 +149,14 @@ function resolveRuntimeRoot(cwd: string): string {
     return path.resolve(configured);
   }
   return path.resolve(cwd);
+}
+
+function resolveCliRuntimeRoot(cwd: string): string {
+  const service = resolveLaunchdServiceInfo(cwd);
+  if (fs.existsSync(service.installedPlistPath) && fs.existsSync(service.managedWrapperPath) && fs.existsSync(service.managedRuntimeRoot)) {
+    return service.managedRuntimeRoot;
+  }
+  return resolveRuntimeRoot(cwd);
 }
 
 function readLaunchdLogPaths(cwd: string): { stdoutLogPath: string | null; stderrLogPath: string | null } {
@@ -185,7 +205,6 @@ function readLaunchdPlistRaw(cwd: string): string | null {
 
 export function renderLaunchdPlist(service: LaunchdServiceInfo): string {
   const launchPath = `${path.dirname(service.nodeBinaryPath)}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin`;
-  const launchCommand = `cd ${shellQuote(service.runtimeRoot)} && exec ${shellQuote(service.nodeBinaryPath)} ${shellQuote("./scripts/start-with-proxy.mjs")}`;
   return [
     '<?xml version="1.0" encoding="UTF-8"?>',
     '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">',
@@ -200,9 +219,7 @@ export function renderLaunchdPlist(service: LaunchdServiceInfo): string {
     `  <string>${escapeXml(service.label)}</string>`,
     "  <key>ProgramArguments</key>",
     "  <array>",
-    "    <string>/bin/bash</string>",
-    "    <string>-lc</string>",
-    `    <string>${escapeXml(launchCommand)}</string>`,
+    `    <string>${escapeXml(service.managedWrapperPath)}</string>`,
     "  </array>",
     "  <key>RunAtLoad</key>",
     "  <true/>",
@@ -225,13 +242,40 @@ export function renderManagedLaunchdWrapper(service: LaunchdServiceInfo): string
     "#!/usr/bin/env bash",
     "set -euo pipefail",
     "",
+    'SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"',
+    `RUNTIME_ROOT=${shellQuote(service.managedRuntimeRoot)}`,
+    `RUNTIME_ENTRY=${shellQuote(service.managedEntryScriptPath)}`,
+    `RUNTIME_WAIT_INTERVAL=${shellQuote(String(process.env.DISCORD_RUNTIME_WAIT_INTERVAL_SECONDS ?? "5"))}`,
+    "",
     `export PATH=${shellQuote(`${path.dirname(service.nodeBinaryPath)}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin`)}`,
+    `export DISCORD_BRIDGE_ROOT=${shellQuote(service.managedRuntimeRoot)}`,
     `export DISCORD_STDOUT_LOG_PATH=${shellQuote(service.stdoutLogPath)}`,
     `export DISCORD_STDERR_LOG_PATH=${shellQuote(service.stderrLogPath)}`,
     `export DISCORD_LOG_ROTATE_MAX_BYTES=${shellQuote(String(process.env.DISCORD_LOG_ROTATE_MAX_BYTES ?? "10485760"))}`,
     `export DISCORD_LOG_ROTATE_MAX_FILES=${shellQuote(String(process.env.DISCORD_LOG_ROTATE_MAX_FILES ?? "5"))}`,
-    `cd ${shellQuote(service.runtimeRoot)}`,
-    `exec ${shellQuote(service.managedSupervisorPath)} -- ${shellQuote(service.nodeBinaryPath)} ${shellQuote(service.entryScriptPath)}`,
+    `export RESTART_REQUEST_PATH=${shellQuote(path.resolve(service.managedRuntimeRoot, "data/restart-request.json"))}`,
+    `export RESTART_ACK_PATH=${shellQuote(path.resolve(service.managedRuntimeRoot, "data/restart-ack.json"))}`,
+    `export HEARTBEAT_PATH=${shellQuote(path.resolve(service.managedRuntimeRoot, "data/bridge-heartbeat.json"))}`,
+    `export STATE_PATH=${shellQuote(path.resolve(service.managedRuntimeRoot, "data/state.json"))}`,
+    `export CHANNEL_CONFIG_PATH=${shellQuote(path.resolve(service.managedRuntimeRoot, "config/channels.json"))}`,
+    `export DISCORD_HEARTBEAT_PATH=${shellQuote(path.resolve(service.managedRuntimeRoot, "data/bridge-heartbeat.json"))}`,
+    `export DISCORD_RESTART_REQUEST_PATH=${shellQuote(path.resolve(service.managedRuntimeRoot, "data/restart-request.json"))}`,
+    `export DISCORD_RESTART_ACK_PATH=${shellQuote(path.resolve(service.managedRuntimeRoot, "data/restart-ack.json"))}`,
+    `export DISCORD_RESTART_NOTICE_PATH=${shellQuote(path.resolve(service.managedRuntimeRoot, "data/restart-discord-notice.json"))}`,
+    `export DISCORD_RESTART_LIFECYCLE_STATE_PATH=${shellQuote(path.resolve(service.managedRuntimeRoot, "data/restart-lifecycle-state.json"))}`,
+    `export DISCORD_RESTART_LIFECYCLE_LOG_PATH=${shellQuote(path.resolve(service.managedRuntimeRoot, "data/restart-lifecycle.log"))}`,
+    `export DISCORD_INFLIGHT_RECOVERY_PATH=${shellQuote(path.resolve(service.managedRuntimeRoot, "data/inflight-turns.json"))}`,
+    `export FEISHU_EVENT_DEDUPE_PATH=${shellQuote(path.resolve(service.managedRuntimeRoot, "data/feishu-seen-events.json"))}`,
+    `export RESTART_SUPERVISOR_LOG_PATH=${shellQuote(path.resolve(service.supportRoot, "restart-supervisor.log"))}`,
+    `export LOG_WRITER_SCRIPT=${shellQuote(service.managedLogWriterPath)}`,
+    "",
+    'while [[ ! -f "${RUNTIME_ENTRY}" ]]; do',
+    '  echo "[launchd-wrapper] runtime root unavailable; waiting for ${RUNTIME_ENTRY}" >&2',
+    '  sleep "${RUNTIME_WAIT_INTERVAL}"',
+    "done",
+    "",
+    'cd "${RUNTIME_ROOT}"',
+    `exec "\${SCRIPT_DIR}/restart-supervisor.sh" -- ${shellQuote(service.nodeBinaryPath)} "\${RUNTIME_ENTRY}"`,
     ""
   ].join("\n");
 }

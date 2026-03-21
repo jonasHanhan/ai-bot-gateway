@@ -39,7 +39,8 @@ export function createFeishuRuntime(deps) {
     feishuEventDedupePath,
     feishuEventDedupeTtlMs,
     feishuUnboundChatMode,
-    feishuUnboundChatCwd
+    feishuUnboundChatCwd,
+    feishuStatusReactions
   } = runtimeEnv;
   const seenEventIds = new Map();
   const sentMessages = new Map();
@@ -214,11 +215,17 @@ export function createFeishuRuntime(deps) {
       text:
         messageType === "text" || messageType === "post"
           ? normalizeIncomingText(extractTextMessageContent(message.content, messageType))
-          : "[image]"
+          : messageType === "file"
+            ? "[file]"
+            : "[image]"
     });
 
     if (messageType === "image") {
       await handleInboundImageMessage({ inboundMessage, senderOpenId, message });
+      return;
+    }
+    if (messageType === "file") {
+      await handleInboundFileMessage({ inboundMessage, senderOpenId, message });
       return;
     }
 
@@ -549,6 +556,59 @@ export function createFeishuRuntime(deps) {
     });
   }
 
+  async function handleInboundFileMessage({ inboundMessage, senderOpenId, message }) {
+    const handlingDecision = resolveIncomingHandlingDecision(message, "", feishuRequireMentionInGroup);
+    if (!handlingDecision.allowed) {
+      logInboundIngress("drop_file_routing", {
+        routeId: inboundMessage?.channelId ?? "",
+        chatId: inboundMessage?.channel?.chatId ?? "",
+        chatType: String(message?.chat_type ?? ""),
+        messageId: String(message?.message_id ?? ""),
+        senderOpenId,
+        reason: handlingDecision.reason
+      });
+      return;
+    }
+
+    const context = resolveInboundContext(inboundMessage);
+    if (!context) {
+      await replyWithUnboundChatMessage(inboundMessage, senderOpenId);
+      return;
+    }
+
+    let fileAttachment;
+    try {
+      fileAttachment = await downloadInboundFileAttachment(message);
+    } catch (error) {
+      console.warn(`failed to download Feishu file ${message?.message_id ?? "(unknown)"}: ${error.message}`);
+      await safeReply(inboundMessage, "I could not download that Feishu file. Please try again or send the path manually.");
+      return;
+    }
+
+    if (!fileAttachment) {
+      await safeReply(inboundMessage, "I could not extract a file from that Feishu message.");
+      return;
+    }
+
+    const inputItems = await runtimeAdapters.buildTurnInputFromMessage(inboundMessage, "", [fileAttachment], context.setup);
+    if (inputItems.length === 0) {
+      await safeReply(inboundMessage, "I received the file but could not build a Codex input from it.");
+      return;
+    }
+    runtimeAdapters.enqueuePrompt(context.repoChannelId, {
+      inputItems,
+      message: inboundMessage,
+      setup: context.setup,
+      repoChannelId: context.repoChannelId,
+      platform: "feishu",
+      requestId: buildTurnRequestId({
+        platform: "feishu",
+        routeId: context.repoChannelId,
+        messageId: inboundMessage.id
+      })
+    });
+  }
+
   async function start() {
     if (!feishuEnabled) {
       return {
@@ -649,6 +709,16 @@ export function createFeishuRuntime(deps) {
           replyToMessageId: options.sourceMessageId
         });
       },
+      async replyToMessage(messageId, payload) {
+        return await sendOutgoingPayload({
+          chatId,
+          payload,
+          replyToMessageId: messageId
+        });
+      },
+      async addReaction(messageId, reaction) {
+        return await addReactionToMessage(messageId, reaction);
+      },
       messages: {
         fetch: async (messageId) => sentMessages.get(String(messageId)) ?? null,
         edit: async (messageId, payload) => {
@@ -657,6 +727,9 @@ export function createFeishuRuntime(deps) {
             return null;
           }
           return await existing.edit(payload);
+        },
+        react: async (messageId, reaction) => {
+          return await addReactionToMessage(messageId, reaction);
         }
       }
     };
@@ -675,11 +748,14 @@ export function createFeishuRuntime(deps) {
       channelId: channel.id,
       attachments: new Map(),
       async reply(payload) {
-        return await sendTextMessage({
+        return await sendOutgoingPayload({
           chatId: channel.chatId,
-          text: extractOutgoingText(payload),
+          payload,
           replyToMessageId: messageId
         });
+      },
+      async react(reaction) {
+        return await addReactionToMessage(messageId, reaction);
       }
     };
   }
@@ -689,45 +765,15 @@ export function createFeishuRuntime(deps) {
     if (!normalizedText) {
       return null;
     }
-    let response;
-    if (replyToMessageId) {
-      response = await feishuRequest(`/open-apis/im/v1/messages/${encodeURIComponent(replyToMessageId)}/reply`, {
-        method: "POST",
-        body: {
-          msg_type: "text",
-          content: JSON.stringify({ text: normalizedText })
-        }
-      });
-    } else {
-      response = await feishuRequest(`/open-apis/im/v1/messages?receive_id_type=chat_id`, {
-        method: "POST",
-        body: {
-          receive_id: chatId,
-          msg_type: "text",
-          content: JSON.stringify({ text: normalizedText })
-        }
-      });
-    }
-
-    const messageId =
-      String(response?.data?.message_id ?? response?.message_id ?? "").trim() ||
-      `feishu-local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const channel = createChannel(chatId, {
-      sourceMessageId: replyToMessageId
+    const outgoing = buildOutgoingTextEnvelope(normalizedText);
+    const sent = await sendStructuredMessage({
+      chatId,
+      msgType: outgoing.msgType,
+      content: outgoing.content,
+      replyToMessageId,
+      displayText: outgoing.displayText
     });
-    const sent = {
-      id: messageId,
-      platform: "feishu",
-      supportsEdits: false,
-      content: normalizedText,
-      channel,
-      channelId: channel.id,
-      async edit(payload) {
-        throw new Error("Feishu message editing is not supported");
-      }
-    };
-    sentMessages.set(messageId, sent);
-    rememberOutgoingText(chatId, normalizedText);
+    rememberOutgoingText(chatId, outgoing.displayText);
     return sent;
   }
 
@@ -759,7 +805,7 @@ export function createFeishuRuntime(deps) {
     });
   }
 
-  async function sendStructuredMessage({ chatId, msgType, content, replyToMessageId }) {
+  async function sendStructuredMessage({ chatId, msgType, content, replyToMessageId, displayText = "" }) {
     let response;
     if (replyToMessageId) {
       response = await feishuRequest(`/open-apis/im/v1/messages/${encodeURIComponent(replyToMessageId)}/reply`, {
@@ -790,11 +836,14 @@ export function createFeishuRuntime(deps) {
       id: messageId,
       platform: "feishu",
       supportsEdits: false,
-      content: msgType === "text" ? String(content?.text ?? "").trim() : JSON.stringify(content),
+      content: displayText || (msgType === "text" ? String(content?.text ?? "").trim() : JSON.stringify(content)),
       channel,
       channelId: channel.id,
       async edit(payload) {
         throw new Error("Feishu message editing is not supported");
+      },
+      async react(reaction) {
+        return await addReactionToMessage(messageId, reaction);
       }
     };
     sentMessages.set(messageId, sent);
@@ -970,6 +1019,26 @@ export function createFeishuRuntime(deps) {
     return payload;
   }
 
+  async function addReactionToMessage(messageId, reaction) {
+    const normalizedMessageId = String(messageId ?? "").trim();
+    const emojiType = normalizeReactionType(reaction);
+    if (!normalizedMessageId || !emojiType) {
+      return null;
+    }
+    const payload = await feishuRequest(`/open-apis/im/v1/messages/${encodeURIComponent(normalizedMessageId)}/reactions`, {
+      method: "POST",
+      body: {
+        reaction_type: {
+          emoji_type: emojiType
+        }
+      }
+    });
+    return {
+      reactionId: String(payload?.data?.reaction_id ?? "").trim() || null,
+      emojiType
+    };
+  }
+
   async function inviteCurrentAppBotToChat(chatId) {
     const payload = await feishuRequest(
       `/open-apis/im/v1/chats/${encodeURIComponent(chatId)}/members?member_id_type=app_id&succeed_type=1`,
@@ -1030,6 +1099,22 @@ export function createFeishuRuntime(deps) {
 
   function isUrlVerification(payload) {
     return String(payload?.type ?? "").trim() === "url_verification" && typeof payload?.challenge === "string";
+  }
+
+  function normalizeReactionType(reaction) {
+    if (typeof reaction === "string") {
+      return reaction.trim();
+    }
+    const emojiType = typeof reaction?.emojiType === "string" ? reaction.emojiType.trim() : "";
+    if (emojiType) {
+      return emojiType;
+    }
+    const reactionKey = typeof reaction?.key === "string" ? reaction.key.trim() : "";
+    if (!reactionKey || !feishuStatusReactions || typeof feishuStatusReactions !== "object") {
+      return "";
+    }
+    const candidate = feishuStatusReactions[reactionKey];
+    return typeof candidate === "string" ? candidate.trim() : "";
   }
 
   async function markEventSeen(eventId) {
@@ -1144,6 +1229,29 @@ export function createFeishuRuntime(deps) {
     return `选择第${normalizedText}项：${selectedOptionText}`;
   }
 
+  function buildOutgoingTextEnvelope(text) {
+    const normalizedText = String(text ?? "").trim();
+    if (!normalizedText) {
+      return {
+        msgType: "text",
+        content: { text: "" },
+        displayText: ""
+      };
+    }
+    if (shouldRenderMarkdownAsInteractiveCard(normalizedText)) {
+      return {
+        msgType: "interactive",
+        content: buildMarkdownInteractiveCard(normalizedText),
+        displayText: normalizedText
+      };
+    }
+    return {
+      msgType: "text",
+      content: { text: normalizedText },
+      displayText: normalizedText
+    };
+  }
+
   return {
     enabled: feishuEnabled,
     transport,
@@ -1207,7 +1315,10 @@ export function createFeishuRuntime(deps) {
   }
 
   async function downloadInboundImageAttachment(message) {
-    const resource = extractImageMessageResource(message?.content);
+    const resource = extractMessageResource(message?.content, {
+      primaryKeys: ["image_key", "file_key", "key"],
+      fallbackNameKeys: ["file_name", "name", "title"]
+    });
     if (!resource) {
       return null;
     }
@@ -1234,6 +1345,37 @@ export function createFeishuRuntime(deps) {
       name: path.basename(filePath)
     };
   }
+
+  async function downloadInboundFileAttachment(message) {
+    const resource = extractMessageResource(message?.content, {
+      primaryKeys: ["file_key", "key", "image_key"],
+      fallbackNameKeys: ["file_name", "name", "title"]
+    });
+    if (!resource) {
+      return null;
+    }
+
+    const response = await feishuBinaryRequest(
+      `/open-apis/im/v1/messages/${encodeURIComponent(message.message_id)}/resources/${encodeURIComponent(resource.resourceKey)}?type=file`
+    );
+    const bytes = Buffer.from(await response.arrayBuffer());
+    if (bytes.length === 0) {
+      return null;
+    }
+
+    const targetDir = resolveImageCacheDir(imageCacheDir);
+    await fs.mkdir(targetDir, { recursive: true });
+    const targetName = buildDownloadedFileName(message, resource, response.headers);
+    const filePath = path.join(targetDir, targetName);
+    await fs.writeFile(filePath, bytes);
+    return {
+      kind: "file",
+      path: filePath,
+      contentType: response.headers.get("content-type") ?? "application/octet-stream",
+      name: path.basename(filePath),
+      sizeBytes: bytes.length
+    };
+  }
 }
 
 async function readRequestBody(request) {
@@ -1242,6 +1384,43 @@ async function readRequestBody(request) {
     chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
   }
   return Buffer.concat(chunks).toString("utf8");
+}
+
+function shouldRenderMarkdownAsInteractiveCard(text) {
+  if (typeof text !== "string") {
+    return false;
+  }
+  const normalized = text.trim();
+  if (!normalized) {
+    return false;
+  }
+  return (
+    /```[\s\S]*```/.test(normalized) ||
+    /(^|\n)\s{0,3}#{1,6}\s+\S/.test(normalized) ||
+    /(^|\n)\s{0,3}(?:[-*+]\s+\S|\d+\.\s+\S)/.test(normalized) ||
+    /(^|\n)\s*>\s+\S/.test(normalized) ||
+    /\*\*[^*][\s\S]*?\*\*/.test(normalized) ||
+    /__[^_][\s\S]*?__/.test(normalized) ||
+    /~~[^~][\s\S]*?~~/.test(normalized) ||
+    /\[[^\]]+\]\((?:https?:\/\/|mailto:|\/|\.{1,2}\/|~\/)/.test(normalized)
+  );
+}
+
+function buildMarkdownInteractiveCard(text) {
+  return {
+    config: {
+      wide_screen_mode: true
+    },
+    elements: [
+      {
+        tag: "div",
+        text: {
+          tag: "lark_md",
+          content: text
+        }
+      }
+    ]
+  };
 }
 
 function extractTextMessageContent(rawContent, messageType = "text") {
@@ -1258,18 +1437,18 @@ function extractTextMessageContent(rawContent, messageType = "text") {
   return "";
 }
 
-function extractImageMessageResource(rawContent) {
+function extractMessageResource(rawContent, options = {}) {
   const parsed = parseFeishuMessageContent(rawContent);
   if (!parsed) {
     return null;
   }
-  const resourceKey = findFirstString(parsed, ["image_key", "file_key", "key"]);
+  const resourceKey = findFirstString(parsed, options.primaryKeys ?? ["key"]);
   if (!resourceKey) {
     return null;
   }
   return {
     resourceKey,
-    fileName: findFirstString(parsed, ["file_name", "name", "title"])
+    fileName: findFirstString(parsed, options.fallbackNameKeys ?? ["file_name", "name", "title"])
   };
 }
 
@@ -1328,10 +1507,42 @@ function findFirstString(value, candidateKeys) {
 
 function normalizeIncomingMessageType(messageType) {
   const normalized = String(messageType ?? "").trim().toLowerCase();
-  if (normalized === "text" || normalized === "image" || normalized === "post") {
+  if (normalized === "text" || normalized === "image" || normalized === "post" || normalized === "file") {
     return normalized;
   }
   return "";
+}
+
+function buildDownloadedFileName(message, resource, headers) {
+  const rawName = String(resource?.fileName ?? "").trim();
+  const extension =
+    path.extname(rawName).toLowerCase() ||
+    guessBinaryExtensionFromHeaders(headers) ||
+    ".bin";
+  const baseName = sanitizeFileToken(rawName ? rawName.slice(0, Math.max(0, rawName.length - extension.length)) : "attachment");
+  return `${Date.now()}-${sanitizeFileToken(message?.message_id || "feishu")}-${sanitizeFileToken(resource?.resourceKey || "file")}-${baseName}${extension}`;
+}
+
+function guessBinaryExtensionFromHeaders(headers) {
+  const contentType = String(headers?.get?.("content-type") ?? "").toLowerCase();
+  if (!contentType) {
+    return "";
+  }
+  const known = {
+    "application/pdf": ".pdf",
+    "text/plain": ".txt",
+    "text/markdown": ".md",
+    "application/json": ".json",
+    "text/csv": ".csv",
+    "application/zip": ".zip",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+    "application/msword": ".doc",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
+    "application/vnd.ms-excel": ".xls",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation": ".pptx",
+    "application/vnd.ms-powerpoint": ".ppt"
+  };
+  return known[contentType] ?? "";
 }
 
 function extractPostMessageText(value) {

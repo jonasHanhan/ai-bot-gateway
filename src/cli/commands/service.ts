@@ -1,8 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import type { CliCommandResult, CliContext } from "../../types/events.js";
-import { renderLaunchdPlist, resolveLaunchdServiceInfo } from "../paths.js";
+import { renderLaunchdPlist, renderManagedLaunchdWrapper, resolveLaunchdServiceInfo } from "../paths.js";
 
 interface LaunchctlResult {
   code: number | null;
@@ -15,6 +16,10 @@ interface ProcessEntry {
   ppid: number | null;
   command: string;
 }
+
+const ALWAYS_INCLUDED_RUNTIME_DEPENDENCIES = ["dotenv", "https-proxy-agent", "undici"];
+const DISCORD_RUNTIME_DEPENDENCIES = ["discord.js"];
+const FEISHU_RUNTIME_DEPENDENCIES = ["@larksuiteoapi/node-sdk"];
 
 type LaunchctlRunner = (args: string[]) => Promise<LaunchctlResult>;
 type ProcessManager = {
@@ -315,10 +320,13 @@ function isManagedRuntimeProcess(entry: ProcessEntry, service: ReturnType<typeof
   if (!command) {
     return false;
   }
-  if (command.includes(service.entryScriptPath)) {
+  if (command.includes(service.entryScriptPath) || command.includes(service.managedEntryScriptPath)) {
     return true;
   }
-  if (command.includes(service.runtimeRoot) && /restart-supervisor/i.test(command)) {
+  if (
+    (command.includes(service.runtimeRoot) || command.includes(service.managedRuntimeRoot) || command.includes(service.supportRoot)) &&
+    /restart-supervisor/i.test(command)
+  ) {
     return true;
   }
   return false;
@@ -366,9 +374,207 @@ function truncateError(error: unknown, limit = 400): string {
 async function installLaunchdPlist(service: ReturnType<typeof resolveLaunchdServiceInfo>): Promise<void> {
   await fs.readFile(service.sourceWrapperPath, "utf8");
   await fs.readFile(service.sourceSupervisorPath, "utf8");
+  await fs.readFile(service.sourceLogWriterPath, "utf8");
+
+  await installManagedRuntimeMirror(service);
 
   const plistContent = renderLaunchdPlist(service);
+  const managedWrapperContent = renderManagedLaunchdWrapper(service);
+  const supervisorContent = await fs.readFile(service.sourceSupervisorPath, "utf8");
+  const logWriterContent = await fs.readFile(service.sourceLogWriterPath, "utf8");
+
+  await fs.mkdir(service.supportRoot, { recursive: true });
+  await fs.writeFile(service.managedWrapperPath, managedWrapperContent, "utf8");
+  await fs.writeFile(service.managedSupervisorPath, supervisorContent, "utf8");
+  await fs.writeFile(service.managedLogWriterPath, logWriterContent, "utf8");
+  await fs.chmod(service.managedWrapperPath, 0o755);
+  await fs.chmod(service.managedSupervisorPath, 0o755);
+  await fs.chmod(service.managedLogWriterPath, 0o755);
+
   await fs.mkdir(path.dirname(service.installedPlistPath), { recursive: true });
   await fs.writeFile(service.installedPlistPath, plistContent, "utf8");
   await fs.chmod(service.installedPlistPath, 0o600);
+}
+
+async function installManagedRuntimeMirror(service: ReturnType<typeof resolveLaunchdServiceInfo>): Promise<void> {
+  const sourcePackageJsonPath = path.resolve(service.runtimeRoot, "package.json");
+  const sourceEnvPath = path.resolve(service.runtimeRoot, ".env");
+  const sourceConfigPath = path.resolve(service.runtimeRoot, "config");
+  const sourceSrcPath = path.resolve(service.runtimeRoot, "src");
+  const sourceEntryScriptPath = service.entryScriptPath;
+  const sourceDataPath = path.resolve(service.runtimeRoot, "data");
+  const managedRuntimeRoot = service.managedRuntimeRoot;
+  const managedScriptsPath = path.resolve(managedRuntimeRoot, "scripts");
+  const managedDataPath = path.resolve(managedRuntimeRoot, "data");
+  const managedSrcPath = path.resolve(managedRuntimeRoot, "src");
+  const managedConfigPath = path.resolve(managedRuntimeRoot, "config");
+  const managedPackageJsonPath = path.resolve(managedRuntimeRoot, "package.json");
+  const managedPackageLockPath = path.resolve(managedRuntimeRoot, "package-lock.json");
+  const managedEnvPath = path.resolve(managedRuntimeRoot, ".env");
+  const managedEntryScriptPath = path.resolve(managedScriptsPath, "start-with-proxy.mjs");
+
+  const sourcePackageJsonRaw = await fs.readFile(sourcePackageJsonPath, "utf8");
+  await fs.readFile(sourceEntryScriptPath, "utf8");
+  await fs.access(sourceSrcPath);
+  await fs.access(sourceConfigPath);
+  const runtimeEnv = await resolveManagedRuntimeEnv(sourceEnvPath);
+  const managedPackageJson = buildManagedRuntimePackageManifest(JSON.parse(sourcePackageJsonRaw), runtimeEnv);
+
+  await fs.mkdir(managedRuntimeRoot, { recursive: true });
+  await fs.mkdir(managedScriptsPath, { recursive: true });
+  await fs.mkdir(managedDataPath, { recursive: true });
+  await fs.rm(managedSrcPath, { recursive: true, force: true });
+  await fs.rm(managedConfigPath, { recursive: true, force: true });
+  await fs.rm(managedEntryScriptPath, { force: true });
+
+  await fs.cp(sourceSrcPath, managedSrcPath, { recursive: true, force: true });
+  await fs.cp(sourceConfigPath, managedConfigPath, { recursive: true, force: true });
+  await fs.copyFile(sourceEntryScriptPath, managedEntryScriptPath);
+  await fs.writeFile(managedPackageJsonPath, `${JSON.stringify(managedPackageJson, null, 2)}\n`, "utf8");
+  await fs.rm(managedPackageLockPath, { force: true });
+  if (await pathExists(sourceEnvPath)) {
+    await fs.copyFile(sourceEnvPath, managedEnvPath);
+  } else {
+    await fs.rm(managedEnvPath, { force: true });
+  }
+
+  await copyDataFileIfExists(sourceDataPath, managedDataPath, "state.json");
+  await copyDataFileIfExists(sourceDataPath, managedDataPath, "feishu-seen-events.json");
+  await copyDataFileIfExists(sourceDataPath, managedDataPath, "inflight-turns.json");
+
+  const manifestHash = await computeManifestHash([managedPackageJsonPath]);
+  const stampPath = path.resolve(managedRuntimeRoot, ".runtime-install-stamp.json");
+  const existingStamp = await readInstallStamp(stampPath);
+  const nodeModulesPath = path.resolve(managedRuntimeRoot, "node_modules");
+  if (existingStamp !== manifestHash || !(await pathExists(nodeModulesPath))) {
+    await fs.rm(nodeModulesPath, { recursive: true, force: true });
+    await runNpmProductionInstall(managedRuntimeRoot);
+    await fs.writeFile(stampPath, JSON.stringify({ manifestHash }, null, 2), "utf8");
+  }
+}
+
+async function copyDataFileIfExists(sourceDir: string, targetDir: string, fileName: string): Promise<void> {
+  const sourcePath = path.resolve(sourceDir, fileName);
+  if (!(await pathExists(sourcePath))) {
+    return;
+  }
+  await fs.copyFile(sourcePath, path.resolve(targetDir, fileName));
+}
+
+async function pathExists(targetPath: string): Promise<boolean> {
+  try {
+    await fs.access(targetPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function resolveManagedRuntimeEnv(sourceEnvPath: string): Promise<Record<string, string>> {
+  const merged = { ...process.env };
+  if (!(await pathExists(sourceEnvPath))) {
+    return Object.fromEntries(
+      Object.entries(merged).filter(([, value]) => typeof value === "string")
+    );
+  }
+  const envFile = await fs.readFile(sourceEnvPath, "utf8");
+  const parsed = parseEnvFile(envFile);
+  return {
+    ...parsed,
+    ...Object.fromEntries(Object.entries(merged).filter(([, value]) => typeof value === "string"))
+  };
+}
+
+function parseEnvFile(raw: string): Record<string, string> {
+  const parsed = {};
+  for (const line of String(raw ?? "").split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) {
+      continue;
+    }
+    const separatorIndex = trimmed.indexOf("=");
+    if (separatorIndex <= 0) {
+      continue;
+    }
+    const key = trimmed.slice(0, separatorIndex).trim();
+    if (!key) {
+      continue;
+    }
+    let value = trimmed.slice(separatorIndex + 1).trim();
+    if (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1);
+    }
+    parsed[key] = value;
+  }
+  return parsed;
+}
+
+export function buildManagedRuntimePackageManifest(sourcePackageJson: Record<string, any>, runtimeEnv: Record<string, string> = {}) {
+  const dependencies = sourcePackageJson?.dependencies && typeof sourcePackageJson.dependencies === "object"
+    ? sourcePackageJson.dependencies
+    : {};
+  const selectedDependencyNames = new Set(ALWAYS_INCLUDED_RUNTIME_DEPENDENCIES);
+  if (String(runtimeEnv.DISCORD_BOT_TOKEN ?? "").trim()) {
+    for (const dependencyName of DISCORD_RUNTIME_DEPENDENCIES) {
+      selectedDependencyNames.add(dependencyName);
+    }
+  }
+  if (String(runtimeEnv.FEISHU_APP_ID ?? "").trim() && String(runtimeEnv.FEISHU_APP_SECRET ?? "").trim()) {
+    for (const dependencyName of FEISHU_RUNTIME_DEPENDENCIES) {
+      selectedDependencyNames.add(dependencyName);
+    }
+  }
+  const selectedDependencies = Object.fromEntries(
+    Object.entries(dependencies).filter(([dependencyName]) => selectedDependencyNames.has(dependencyName))
+  );
+  return {
+    ...sourcePackageJson,
+    dependencies: selectedDependencies
+  };
+}
+
+async function computeManifestHash(filePaths: string[]): Promise<string> {
+  const hash = createHash("sha256");
+  for (const filePath of filePaths) {
+    hash.update(await fs.readFile(filePath));
+  }
+  return hash.digest("hex");
+}
+
+async function readInstallStamp(stampPath: string): Promise<string> {
+  try {
+    const raw = await fs.readFile(stampPath, "utf8");
+    const parsed = JSON.parse(raw);
+    return typeof parsed?.manifestHash === "string" ? parsed.manifestHash : "";
+  } catch {
+    return "";
+  }
+}
+
+async function runNpmProductionInstall(cwd: string): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn("npm", ["install", "--omit=dev", "--ignore-scripts", "--package-lock=false"], {
+      cwd,
+      env: {
+        ...process.env,
+        NODE_ENV: "production"
+      },
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+    let stderr = "";
+    child.stderr?.on("data", (chunk) => {
+      stderr += String(chunk);
+    });
+    child.once("error", reject);
+    child.once("exit", (code) => {
+      if (code === 0) {
+        resolve();
+        return;
+      }
+      reject(new Error(stderr.trim() || `npm ci failed with code ${String(code)}`));
+    });
+  });
 }

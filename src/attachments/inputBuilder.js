@@ -1,7 +1,20 @@
 import path from "node:path";
 
+const DEFAULT_FILE_PREVIEW_MAX_BYTES = 16 * 1024;
+const DEFAULT_FILE_PREVIEW_MAX_CHARS = 4000;
+
 export function createAttachmentInputBuilder(deps) {
-  const { fs, imageCacheDir, maxImagesPerMessage, discordToken, fetch, formatInputTextForSetup, logger } = deps;
+  const {
+    fs,
+    imageCacheDir,
+    maxImagesPerMessage,
+    discordToken,
+    fetch,
+    formatInputTextForSetup,
+    logger,
+    filePreviewMaxBytes = DEFAULT_FILE_PREVIEW_MAX_BYTES,
+    filePreviewMaxChars = DEFAULT_FILE_PREVIEW_MAX_CHARS
+  } = deps;
 
   function collectImageAttachments(message) {
     if (!message?.attachments?.size) {
@@ -13,14 +26,204 @@ export function createAttachmentInputBuilder(deps) {
 
   async function buildTurnInputFromMessage(message, text, imageAttachments, setup = null) {
     const inputItems = [];
-    const trimmed = typeof text === "string" ? text.trim() : "";
-    if (trimmed) {
-      inputItems.push({ type: "text", text: formatInputTextForSetup(trimmed, setup) });
+    const normalizedAttachments = normalizeAttachments(imageAttachments);
+    const fileAttachments = collectFileAttachments(normalizedAttachments);
+    const combinedText = await buildCombinedInputText(text, fileAttachments);
+    if (combinedText) {
+      inputItems.push({ type: "text", text: formatInputTextForSetup(combinedText, setup) });
     }
 
-    const localImages = await downloadImageAttachments(imageAttachments, message.id);
+    const localImages = await downloadImageAttachments(collectImageLikeAttachments(normalizedAttachments), message.id);
     inputItems.push(...localImages);
     return inputItems;
+  }
+
+  function normalizeAttachments(attachments) {
+    if (!Array.isArray(attachments)) {
+      return [];
+    }
+    return attachments.filter((attachment) => attachment && typeof attachment === "object");
+  }
+
+  function collectImageLikeAttachments(attachments) {
+    return attachments.filter((attachment) => isImageAttachment(attachment));
+  }
+
+  function collectFileAttachments(attachments) {
+    return attachments
+      .filter((attachment) => !isImageAttachment(attachment))
+      .map((attachment) => normalizeFileAttachment(attachment))
+      .filter((attachment) => attachment !== null);
+  }
+
+  function normalizeFileAttachment(attachment) {
+    const filePath = resolveLocalImagePath(attachment);
+    if (!filePath) {
+      return null;
+    }
+    const name =
+      typeof attachment?.name === "string" && attachment.name.trim()
+        ? attachment.name.trim()
+        : path.basename(filePath);
+    const contentType = typeof attachment?.contentType === "string" ? attachment.contentType.trim() : "";
+    const sizeBytes =
+      Number.isFinite(Number(attachment?.sizeBytes)) && Number(attachment.sizeBytes) >= 0
+        ? Number(attachment.sizeBytes)
+        : null;
+    return {
+      path: filePath,
+      name,
+      contentType,
+      sizeBytes
+    };
+  }
+
+  async function buildCombinedInputText(text, fileAttachments) {
+    const parts = [];
+    const trimmed = typeof text === "string" ? text.trim() : "";
+    if (trimmed) {
+      parts.push(trimmed);
+    }
+    const fileContext = await buildFileAttachmentContext(fileAttachments);
+    if (fileContext) {
+      parts.push(fileContext);
+    }
+    return parts.join("\n\n").trim();
+  }
+
+  async function buildFileAttachmentContext(fileAttachments) {
+    if (!Array.isArray(fileAttachments) || fileAttachments.length === 0) {
+      return "";
+    }
+    const lines = [
+      "[Attached files from chat]",
+      "The user sent file attachment(s). Use the metadata, preview, and local paths below:"
+    ];
+    for (const attachment of fileAttachments) {
+      const metadata = await enrichFileAttachmentMetadata(attachment);
+      lines.push("- file");
+      lines.push(`  path: ${metadata.path}`);
+      if (metadata.name) {
+        lines.push(`  name: ${metadata.name}`);
+      }
+      if (metadata.extension) {
+        lines.push(`  extension: ${metadata.extension}`);
+      }
+      if (metadata.contentType) {
+        lines.push(`  content-type: ${metadata.contentType}`);
+      }
+      if (metadata.sizeBytes !== null) {
+        lines.push(`  size-bytes: ${metadata.sizeBytes}`);
+      }
+      if (metadata.previewStatus) {
+        lines.push(`  preview-status: ${metadata.previewStatus}`);
+      }
+      if (metadata.previewText) {
+        lines.push("  preview:");
+        lines.push("  ```text");
+        lines.push(indentMultilineText(metadata.previewText, "  "));
+        lines.push("  ```");
+      }
+    }
+    return lines.join("\n");
+  }
+
+  async function enrichFileAttachmentMetadata(attachment) {
+    const extension = path.extname(attachment.path).toLowerCase();
+    let sizeBytes = attachment.sizeBytes;
+    if (sizeBytes === null) {
+      try {
+        const stats = await fs.stat(attachment.path);
+        if (stats?.isFile?.()) {
+          sizeBytes = stats.size;
+        }
+      } catch (error) {
+        logger?.warn?.(`failed to stat attachment ${attachment.path}: ${error.message}`);
+      }
+    }
+
+    let previewStatus = "";
+    let previewText = "";
+    if (isTextPreviewCandidate(attachment, extension)) {
+      try {
+        const preview = await readTextPreview(attachment.path, sizeBytes);
+        previewStatus = preview.status;
+        previewText = preview.text;
+      } catch (error) {
+        previewStatus = `preview-read-failed (${error.message})`;
+      }
+    } else {
+      previewStatus = "skipped (non-text attachment)";
+    }
+
+    return {
+      ...attachment,
+      extension,
+      sizeBytes,
+      previewStatus,
+      previewText
+    };
+  }
+
+  function isTextPreviewCandidate(attachment, extension) {
+    const normalizedContentType = String(attachment.contentType ?? "").toLowerCase();
+    if (normalizedContentType.startsWith("text/")) {
+      return true;
+    }
+    if (
+      normalizedContentType.includes("json") ||
+      normalizedContentType.includes("xml") ||
+      normalizedContentType.includes("yaml") ||
+      normalizedContentType.includes("javascript")
+    ) {
+      return true;
+    }
+    return TEXT_PREVIEW_EXTENSIONS.has(extension);
+  }
+
+  async function readTextPreview(filePath, knownSizeBytes) {
+    const buffer = await fs.readFile(filePath);
+    const sizeBytes = Number.isFinite(Number(knownSizeBytes)) ? Number(knownSizeBytes) : buffer.length;
+    const truncatedByBytes = buffer.length > filePreviewMaxBytes;
+    const previewBuffer = truncatedByBytes ? buffer.subarray(0, filePreviewMaxBytes) : buffer;
+    const decodedText = previewBuffer.toString("utf8");
+    const normalizedDecodedText = normalizePreviewText(decodedText);
+    const previewText = truncatePreviewText(decodedText);
+    if (!previewText.trim()) {
+      return {
+        status: "empty-text-preview",
+        text: ""
+      };
+    }
+    if (truncatedByBytes || previewText.length < normalizedDecodedText.length || sizeBytes > filePreviewMaxBytes) {
+      return {
+        status: `truncated (${Math.min(sizeBytes, filePreviewMaxBytes)}/${sizeBytes} bytes shown)`,
+        text: previewText
+      };
+    }
+    return {
+      status: `complete (${sizeBytes} bytes)`,
+      text: previewText
+    };
+  }
+
+  function truncatePreviewText(text) {
+    const normalized = normalizePreviewText(text);
+    if (normalized.length <= filePreviewMaxChars) {
+      return normalized;
+    }
+    return `${normalized.slice(0, Math.max(1, filePreviewMaxChars - 1))}…`;
+  }
+
+  function normalizePreviewText(text) {
+    return String(text ?? "").replace(/\0/g, "").trim();
+  }
+
+  function indentMultilineText(text, prefix) {
+    return String(text ?? "")
+      .split(/\r?\n/)
+      .map((line) => `${prefix}${line}`)
+      .join("\n");
   }
 
   async function downloadImageAttachments(attachments, messageId) {
@@ -113,6 +316,9 @@ export function createAttachmentInputBuilder(deps) {
     if (!attachment) {
       return false;
     }
+    if (String(attachment.kind ?? "").trim().toLowerCase() === "image") {
+      return true;
+    }
     const contentType = String(attachment.contentType ?? "").toLowerCase();
     if (contentType.startsWith("image/")) {
       return true;
@@ -153,3 +359,49 @@ export function createAttachmentInputBuilder(deps) {
     buildTurnInputFromMessage
   };
 }
+
+const TEXT_PREVIEW_EXTENSIONS = new Set([
+  ".txt",
+  ".md",
+  ".markdown",
+  ".json",
+  ".jsonl",
+  ".yaml",
+  ".yml",
+  ".xml",
+  ".csv",
+  ".tsv",
+  ".log",
+  ".ini",
+  ".cfg",
+  ".conf",
+  ".env",
+  ".py",
+  ".js",
+  ".mjs",
+  ".cjs",
+  ".ts",
+  ".tsx",
+  ".jsx",
+  ".java",
+  ".kt",
+  ".go",
+  ".rs",
+  ".rb",
+  ".php",
+  ".swift",
+  ".scala",
+  ".sh",
+  ".bash",
+  ".zsh",
+  ".fish",
+  ".sql",
+  ".html",
+  ".css",
+  ".scss",
+  ".less",
+  ".toml",
+  ".lock",
+  ".gitignore",
+  ".dockerfile"
+]);

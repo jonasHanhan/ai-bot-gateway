@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { Client, GatewayIntentBits } from "discord.js";
+import { EventEmitter } from "node:events";
 import { CodexRpcClient } from "../codexRpcClient.js";
 import {
   maybeSendAttachmentsForItem as maybeSendAttachmentsForItemFromService,
@@ -38,9 +38,7 @@ export async function buildRuntimeGraph(deps) {
     stripAnsiForDiscord
   } = runtimeEnv;
 
-  const discord = new Client({
-    intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent]
-  });
+  const discord = discordToken ? await createDiscordClient() : createDisabledDiscordClient();
   const codex = new CodexRpcClient({
     codexBin
   });
@@ -59,7 +57,7 @@ export async function buildRuntimeGraph(deps) {
     fetchChannelByRouteId,
     stripAnsiForDiscord
   });
-  const { safeReply, safeSendToChannel, safeSendToChannelPayload } = channelMessaging;
+  const { safeReply, safeSendToChannel, safeSendToChannelPayload, safeAddReaction } = channelMessaging;
   const sandboxPolicyResolver = createSandboxPolicyResolver({
     path,
     execFileAsync,
@@ -149,6 +147,7 @@ export async function buildRuntimeGraph(deps) {
     codex,
     safeReply,
     safeSendToChannel,
+    safeAddReaction,
     fetchChannelByRouteId,
     activeTurns,
     pendingApprovals,
@@ -158,4 +157,24 @@ export async function buildRuntimeGraph(deps) {
     turnRecoveryStore,
     createApprovalToken
   };
+}
+
+async function createDiscordClient() {
+  const { Client, GatewayIntentBits } = await import("discord.js");
+  return new Client({
+    intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent]
+  });
+}
+
+function createDisabledDiscordClient() {
+  const client = new EventEmitter();
+  client.channels = {
+    fetch: async () => null
+  };
+  client.application = null;
+  client.user = null;
+  client.isReady = () => false;
+  client.login = async () => null;
+  client.destroy = () => {};
+  return client;
 }

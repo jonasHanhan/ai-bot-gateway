@@ -15,7 +15,12 @@ export function patchWsModuleForProxy(options = {}) {
     return { patched: false, reason: "missing_proxy_url" };
   }
 
-  const wsModule = requireFn("ws");
+  let wsModule;
+  try {
+    wsModule = requireFn("ws");
+  } catch {
+    return { patched: false, reason: "missing_ws_module" };
+  }
   const OriginalWebSocket = wsModule?.WebSocket;
   if (typeof OriginalWebSocket !== "function") {
     return { patched: false, reason: "missing_websocket_constructor" };

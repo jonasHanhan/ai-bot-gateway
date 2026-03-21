@@ -1,8 +1,8 @@
-import { ChannelType } from "discord.js";
+import { DISCORD_CHANNEL_TYPES } from "../discord/constants.js";
 import { resolveSetupAgentAndModel } from "../agents/setupResolution.js";
 
 export function isGeneralChannel(channel, generalChannel) {
-  if (channel?.type !== ChannelType.GuildText) {
+  if (channel?.type !== DISCORD_CHANNEL_TYPES.GuildText) {
     return false;
   }
   const generalChannelId = String(generalChannel?.id ?? "").trim();
@@ -17,7 +17,7 @@ export function isGeneralChannel(channel, generalChannel) {
 
 export function resolveRepoContext(message, options) {
   const { channelSetups, config, generalChannel } = options;
-  if (message.channel.type !== ChannelType.GuildText) {
+  if (message.channel.type !== DISCORD_CHANNEL_TYPES.GuildText) {
     return null;
   }
 

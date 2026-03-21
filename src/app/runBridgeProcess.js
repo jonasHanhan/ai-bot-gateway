@@ -52,7 +52,7 @@ export async function runBridgeProcess(context) {
     })
   );
 
-  const { backendRuntime, platformRegistry } = attachBuiltRuntimes({
+  const { backendRuntime, platformRegistry } = await attachBuiltRuntimes({
     context,
     runtimeEnv,
     getChannelSetups,

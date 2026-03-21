@@ -1,8 +1,7 @@
-import { ChannelType, MessageFlags } from "discord.js";
 import { buildBridgeRuntimes } from "./buildRuntimes.js";
 import { isDiscordMissingPermissionsError, waitForDiscordReady } from "./runtimeUtils.js";
 
-export function attachBuiltRuntimes(params) {
+export async function attachBuiltRuntimes(params) {
   const {
     context,
     runtimeEnv,
@@ -40,11 +39,7 @@ export function attachBuiltRuntimes(params) {
     notificationRuntime,
     serverRequestRuntime,
     discordRuntime
-  } = buildBridgeRuntimes({
-    platformTypes: {
-      ChannelType,
-      MessageFlags
-    },
+  } = await buildBridgeRuntimes({
     runtimeContext: {
       path,
       fs,

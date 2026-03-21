@@ -90,4 +90,26 @@ describe("cli paths", () => {
     expect(runtimePaths.stderrLogPath).toBe(path.resolve("/tmp/installed.err.log"));
   });
 
+  test("prefers managed runtime paths when the installed launch agent mirror exists", async () => {
+    const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "codex-bridge-cli-paths-"));
+    tempDirs.push(cwd);
+    const fakeHome = await fs.mkdtemp(path.join(os.tmpdir(), "codex-bridge-cli-home-"));
+    tempDirs.push(fakeHome);
+    process.env.HOME = fakeHome;
+
+    const installedPlistPath = resolveInstalledLaunchdPlistPath("com.agent.gateway");
+    const supportRoot = path.join(fakeHome, "Library", "Application Support", "AgentGateway", "com.agent.gateway");
+    const managedRuntimeRoot = path.join(supportRoot, "runtime");
+    await fs.mkdir(path.join(fakeHome, "Library", "LaunchAgents"), { recursive: true });
+    await fs.mkdir(path.join(managedRuntimeRoot, "config"), { recursive: true });
+    await fs.mkdir(path.join(managedRuntimeRoot, "data"), { recursive: true });
+    await fs.writeFile(installedPlistPath, "<plist><dict><key>Label</key><string>com.agent.gateway</string></dict></plist>", "utf8");
+    await fs.writeFile(path.join(supportRoot, "launchd-wrapper.sh"), "#!/usr/bin/env bash\n", "utf8");
+
+    const runtimePaths = resolveCliRuntimePaths(cwd);
+    expect(runtimePaths.configPath).toBe(path.join(managedRuntimeRoot, "config", "channels.json"));
+    expect(runtimePaths.statePath).toBe(path.join(managedRuntimeRoot, "data", "state.json"));
+    expect(runtimePaths.heartbeatPath).toBe(path.join(managedRuntimeRoot, "data", "bridge-heartbeat.json"));
+  });
+
 });

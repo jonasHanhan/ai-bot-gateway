@@ -1276,6 +1276,184 @@ describe("feishu runtime", () => {
     expect(await fs.readFile(imagePath)).toEqual(Buffer.from([1, 2, 3, 4]));
   });
 
+  test("queues file prompts for mapped chats by downloading the Feishu resource into a local file attachment", async () => {
+    const jobs: Array<{ repoChannelId: string; filePaths: string[]; contentTypes: string[] }> = [];
+    const routeId = makeFeishuRouteId("oc_repo_file_1");
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "feishu-file-test-"));
+
+    globalThis.fetch = async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/tenant_access_token/internal")) {
+        return new Response(JSON.stringify({ code: 0, tenant_access_token: "tenant-token", expire: 7200 }), {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        });
+      }
+      if (url.includes("/open-apis/im/v1/messages/om_in_file_1/resources/file_resource_1?type=file")) {
+        return new Response(Buffer.from("hello from feishu"), {
+          status: 200,
+          headers: { "content-type": "text/plain" }
+        });
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    };
+
+    const runtime = createFeishuRuntime({
+      config: {
+        defaultModel: "gpt-5.3-codex",
+        sandboxMode: "workspace-write",
+        allowedFeishuUserIds: []
+      },
+      runtimeEnv: {
+        feishuEnabled: true,
+        feishuAppId: "cli_test",
+        feishuAppSecret: "secret",
+        feishuVerificationToken: "",
+        feishuTransport: "long-connection",
+        feishuPort: 8788,
+        feishuHost: "127.0.0.1",
+        feishuWebhookPath: "/feishu/events",
+        imageCacheDir: tempDir,
+        feishuGeneralChatId: "",
+        feishuGeneralCwd: "/tmp/general",
+        feishuRequireMentionInGroup: false
+      },
+      getChannelSetups: () => ({
+        [routeId]: {
+          cwd: "/tmp/repo-file",
+          model: "gpt-5.3-codex"
+        }
+      }),
+      runManagedRouteCommand: async () => {},
+      getHelpText: () => "help text",
+      isCommandSupportedForPlatform: () => false,
+      handleCommand: async () => {},
+      runtimeAdapters: {
+        buildTurnInputFromMessage: async (
+          _message: unknown,
+          text: string,
+          attachments: Array<{ path: string; contentType?: string }>
+        ) => [
+          { type: "text", text },
+          ...attachments.map((attachment) => ({
+            type: "text",
+            text: `${attachment.path}|${attachment.contentType ?? ""}`
+          }))
+        ].filter((item) => item.text),
+        enqueuePrompt: (repoChannelId: string, job: { inputItems: Array<{ text?: string }> }) => {
+          const attachmentTexts = job.inputItems.map((item) => item.text).filter(Boolean) as string[];
+          const fileEntries = attachmentTexts.filter((entry) => entry.includes(tempDir));
+          jobs.push({
+            repoChannelId,
+            filePaths: fileEntries.map((entry) => entry.split("|")[0] ?? ""),
+            contentTypes: fileEntries.map((entry) => entry.split("|")[1] ?? "")
+          });
+        }
+      },
+      safeReply: async () => null
+    });
+
+    await runtime.handleEventPayload({
+      header: {
+        event_id: "evt-file-1",
+        event_type: "im.message.receive_v1"
+      },
+      event: {
+        sender: {
+          sender_id: { open_id: "ou_user_file_1" },
+          sender_type: "user"
+        },
+        message: {
+          message_id: "om_in_file_1",
+          chat_id: "oc_repo_file_1",
+          chat_type: "p2p",
+          message_type: "file",
+          content: JSON.stringify({ file_key: "file_resource_1", file_name: "notes.txt" }),
+          mentions: []
+        }
+      }
+    });
+
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0]?.repoChannelId).toBe(routeId);
+    expect(jobs[0]?.filePaths).toHaveLength(1);
+    const filePath = jobs[0]?.filePaths[0] ?? "";
+    expect(filePath.startsWith(tempDir)).toBe(true);
+    expect(jobs[0]?.contentTypes).toEqual(["text/plain"]);
+    expect(await fs.readFile(filePath, "utf8")).toBe("hello from feishu");
+  });
+
+  test("supports Feishu thread replies and reactions on sent messages", async () => {
+    const requests: Array<{ url: string; method: string; body: string }> = [];
+
+    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/tenant_access_token/internal")) {
+        return new Response(JSON.stringify({ code: 0, tenant_access_token: "tenant-token", expire: 7200 }), {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        });
+      }
+      const method = String(init?.method ?? "GET");
+      const body = String(init?.body ?? "");
+      requests.push({ url, method, body });
+      if (url.includes("/reactions")) {
+        return new Response(JSON.stringify({ code: 0, data: { reaction_id: "reaction_1" } }), {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        });
+      }
+      return new Response(JSON.stringify({ code: 0, data: { message_id: `om_native_${requests.length}` } }), {
+        status: 200,
+        headers: { "content-type": "application/json" }
+      });
+    };
+
+    const runtime = createFeishuRuntime({
+      config: {
+        defaultModel: "gpt-5.3-codex",
+        sandboxMode: "workspace-write",
+        allowedFeishuUserIds: []
+      },
+      runtimeEnv: {
+        feishuEnabled: true,
+        feishuAppId: "cli_test",
+        feishuAppSecret: "secret",
+        feishuVerificationToken: "",
+        feishuTransport: "long-connection",
+        feishuPort: 8788,
+        feishuHost: "127.0.0.1",
+        feishuWebhookPath: "/feishu/events",
+        imageCacheDir: "/tmp/feishu-native-actions",
+        feishuGeneralChatId: "",
+        feishuGeneralCwd: "/tmp/general",
+        feishuRequireMentionInGroup: false
+      },
+      getChannelSetups: () => ({}),
+      runManagedRouteCommand: async () => {},
+      getHelpText: () => "help text",
+      isCommandSupportedForPlatform: () => false,
+      handleCommand: async () => {},
+      runtimeAdapters: {
+        buildTurnInputFromMessage: async () => [],
+        enqueuePrompt: () => {}
+      },
+      safeReply: async () => null
+    });
+
+    const channel = await runtime.fetchChannelByRouteId("feishu:oc_native_actions_1");
+    expect(channel).toBeTruthy();
+
+    const sent = await channel.send("hello");
+    expect(sent?.id).toBeTruthy();
+    await sent.react({ emojiType: "DONE" });
+    await channel.replyToMessage(sent.id, "thread follow-up");
+
+    expect(requests.some((request) => request.url.includes("/open-apis/im/v1/messages?receive_id_type=chat_id"))).toBe(true);
+    expect(requests.some((request) => request.url.includes(`/open-apis/im/v1/messages/${sent.id}/reactions`))).toBe(true);
+    expect(requests.some((request) => request.url.includes(`/open-apis/im/v1/messages/${sent.id}/reply`))).toBe(true);
+  });
+
   test("uploads outbound image attachments for Feishu channels", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "feishu-outbound-image-"));
     const imagePath = path.join(tempDir, "rendered.png");
@@ -1351,6 +1529,137 @@ describe("feishu runtime", () => {
     expect(sentBodies[0]?.content).toContain("rendered.png");
     expect(sentBodies[1]?.msgType).toBe("image");
     expect(sentBodies[1]?.content).toContain("img_uploaded_1");
+  });
+
+  test("renders markdown summaries as Feishu interactive cards", async () => {
+    const sentBodies: Array<{ msgType?: string; content?: string }> = [];
+    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/tenant_access_token/internal")) {
+        return new Response(JSON.stringify({ code: 0, tenant_access_token: "tenant-token", expire: 7200 }), {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        });
+      }
+      if (url.includes("/open-apis/im/v1/messages?receive_id_type=chat_id")) {
+        const body = JSON.parse(String(init?.body ?? "{}"));
+        sentBodies.push({ msgType: body.msg_type, content: body.content });
+        return new Response(JSON.stringify({ code: 0, data: { message_id: "om_markdown_card_1" } }), {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        });
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    };
+
+    const runtime = createFeishuRuntime({
+      config: {
+        defaultModel: "gpt-5.3-codex",
+        sandboxMode: "workspace-write",
+        allowedFeishuUserIds: []
+      },
+      runtimeEnv: {
+        feishuEnabled: true,
+        feishuAppId: "cli_test",
+        feishuAppSecret: "secret",
+        feishuVerificationToken: "",
+        feishuTransport: "long-connection",
+        feishuPort: 8788,
+        feishuHost: "127.0.0.1",
+        feishuWebhookPath: "/feishu/events",
+        feishuGeneralChatId: "",
+        feishuGeneralCwd: "/tmp/general",
+        feishuRequireMentionInGroup: false
+      },
+      getChannelSetups: () => ({}),
+      runManagedRouteCommand: async () => {},
+      getHelpText: () => "help text",
+      isCommandSupportedForPlatform: () => false,
+      handleCommand: async () => {},
+      runtimeAdapters: {
+        buildTurnInputFromMessage: async () => [],
+        enqueuePrompt: () => {}
+      },
+      safeReply: async () => null
+    });
+
+    const channel = await runtime.fetchChannelByRouteId("feishu:oc_outbound_markdown_1");
+    expect(channel).toBeTruthy();
+    await channel.send("**系统**\n- CPU 正常\n- 内存正常");
+
+    expect(sentBodies).toHaveLength(1);
+    expect(sentBodies[0]?.msgType).toBe("interactive");
+    const card = JSON.parse(String(sentBodies[0]?.content ?? "{}"));
+    expect(card?.elements?.[0]?.text?.tag).toBe("lark_md");
+    expect(card?.elements?.[0]?.text?.content).toContain("**系统**");
+    expect(card?.elements?.[0]?.text?.content).toContain("- CPU 正常");
+  });
+
+  test("renders markdown replies with payload.content as Feishu interactive cards", async () => {
+    const sentBodies: Array<{ msgType?: string; content?: string }> = [];
+    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/tenant_access_token/internal")) {
+        return new Response(JSON.stringify({ code: 0, tenant_access_token: "tenant-token", expire: 7200 }), {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        });
+      }
+      if (url.includes("/open-apis/im/v1/messages?receive_id_type=chat_id") || url.includes("/reply")) {
+        const body = JSON.parse(String(init?.body ?? "{}"));
+        sentBodies.push({ msgType: body.msg_type, content: body.content });
+        return new Response(JSON.stringify({ code: 0, data: { message_id: `om_markdown_${sentBodies.length}` } }), {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        });
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    };
+
+    const runtime = createFeishuRuntime({
+      config: {
+        defaultModel: "gpt-5.3-codex",
+        sandboxMode: "workspace-write",
+        allowedFeishuUserIds: []
+      },
+      runtimeEnv: {
+        feishuEnabled: true,
+        feishuAppId: "cli_test",
+        feishuAppSecret: "secret",
+        feishuVerificationToken: "",
+        feishuTransport: "long-connection",
+        feishuPort: 8788,
+        feishuHost: "127.0.0.1",
+        feishuWebhookPath: "/feishu/events",
+        feishuGeneralChatId: "",
+        feishuGeneralCwd: "/tmp/general",
+        feishuRequireMentionInGroup: false
+      },
+      getChannelSetups: () => ({}),
+      runManagedRouteCommand: async () => {},
+      getHelpText: () => "help text",
+      isCommandSupportedForPlatform: () => false,
+      handleCommand: async () => {},
+      runtimeAdapters: {
+        buildTurnInputFromMessage: async () => [],
+        enqueuePrompt: () => {}
+      },
+      safeReply: async () => null
+    });
+
+    const channel = await runtime.fetchChannelByRouteId("feishu:oc_outbound_markdown_payload_1");
+    expect(channel).toBeTruthy();
+    await channel.send({
+      content: "**磁盘**\n- `/Volumes/data` 偏高",
+      files: [{ attachment: "/tmp/does-not-exist", name: "missing.txt" }]
+    });
+
+    expect(sentBodies).toHaveLength(2);
+    expect(sentBodies[0]?.msgType).toBe("interactive");
+    const card = JSON.parse(String(sentBodies[0]?.content ?? "{}"));
+    expect(card?.elements?.[0]?.text?.content).toContain("**磁盘**");
+    expect(sentBodies[1]?.msgType).toBe("text");
+    expect(sentBodies[1]?.content).toContain("Unsupported outbound attachments on Feishu");
   });
 
   test("uploads outbound file attachments for Feishu channels", async () => {
@@ -1565,12 +1874,14 @@ describe("feishu runtime", () => {
     await channel.send("```ansi\\n\\u001b[32m+12\\u001b[0m\\n\\u001b[31m-3\\u001b[0m\\n```");
 
     expect(sentBodies).toHaveLength(1);
-    expect(sentBodies[0]?.msgType).toBe("text");
-    expect(sentBodies[0]?.content).not.toContain("\\\\u001b");
-    expect(sentBodies[0]?.content).toContain("+12");
-    expect(sentBodies[0]?.content).toContain("-3");
-    expect(sentBodies[0]?.content).not.toContain("[32m");
-    expect(sentBodies[0]?.content).not.toContain("[31m");
+    expect(sentBodies[0]?.msgType).toBe("interactive");
+    const card = JSON.parse(String(sentBodies[0]?.content ?? "{}"));
+    const markdown = String(card?.elements?.[0]?.text?.content ?? "");
+    expect(markdown).not.toContain("\\u001b");
+    expect(markdown).toContain("+12");
+    expect(markdown).toContain("-3");
+    expect(markdown).not.toContain("[32m");
+    expect(markdown).not.toContain("[31m");
   });
 
   test("marks outbound Feishu messages as non-editable", async () => {

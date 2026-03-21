@@ -3,7 +3,12 @@ import fs from "node:fs/promises";
 import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { runRestartCommand, runStartCommand, runStopCommand } from "../src/cli/commands/service.js";
+import {
+  buildManagedRuntimePackageManifest,
+  runRestartCommand,
+  runStartCommand,
+  runStopCommand
+} from "../src/cli/commands/service.js";
 import { resolveInstalledLaunchdPlistPath } from "../src/cli/paths.js";
 
 const tempDirs: string[] = [];
@@ -24,9 +29,17 @@ afterEach(async () => {
 
 async function seedLaunchdSupportFiles(cwd: string): Promise<void> {
   await fs.mkdir(path.join(cwd, "scripts"), { recursive: true });
+  await fs.mkdir(path.join(cwd, "src"), { recursive: true });
+  await fs.mkdir(path.join(cwd, "config"), { recursive: true });
+  await fs.mkdir(path.join(cwd, "data"), { recursive: true });
   await fs.writeFile(
     path.join(cwd, "scripts", "launchd-wrapper.sh"),
     "#!/usr/bin/env bash\nset -euo pipefail\nexec /bin/bash ./scripts/restart-supervisor.sh -- /usr/bin/node ./scripts/start-with-proxy.mjs\n",
+    "utf8"
+  );
+  await fs.writeFile(
+    path.join(cwd, "scripts", "start-with-proxy.mjs"),
+    'import "../src/index.js";\n',
     "utf8"
   );
   await fs.writeFile(
@@ -34,8 +47,40 @@ async function seedLaunchdSupportFiles(cwd: string): Promise<void> {
     "#!/usr/bin/env bash\n# Host-managed restart supervisor\n",
     "utf8"
   );
+  await fs.writeFile(
+    path.join(cwd, "scripts", "log-rotating-writer.sh"),
+    "#!/usr/bin/env bash\ncat >> \"${2:-/tmp/test.log}\"\n",
+    "utf8"
+  );
+  await fs.writeFile(
+    path.join(cwd, "src", "index.js"),
+    'console.log("runtime ready");\n',
+    "utf8"
+  );
+  await fs.writeFile(
+    path.join(cwd, "config", "channels.json"),
+    JSON.stringify({ channels: {} }, null, 2),
+    "utf8"
+  );
+  await fs.writeFile(
+    path.join(cwd, "data", "state.json"),
+    JSON.stringify({ channels: {} }, null, 2),
+    "utf8"
+  );
+  await fs.writeFile(
+    path.join(cwd, "package.json"),
+    JSON.stringify({
+      name: "agent-gateway-test",
+      private: true,
+      type: "module",
+      dependencies: {}
+    }, null, 2),
+    "utf8"
+  );
   await fs.chmod(path.join(cwd, "scripts", "launchd-wrapper.sh"), 0o755);
+  await fs.chmod(path.join(cwd, "scripts", "start-with-proxy.mjs"), 0o755);
   await fs.chmod(path.join(cwd, "scripts", "restart-supervisor.sh"), 0o755);
+  await fs.chmod(path.join(cwd, "scripts", "log-rotating-writer.sh"), 0o755);
 }
 
 function createProcessManager(entries: Array<{ pid: number; ppid: number | null; command: string }>) {
@@ -81,6 +126,7 @@ describe("cli service commands", () => {
 
     const domain = `gui/${typeof process.getuid === "function" ? process.getuid() : 0}`;
     const installedPlistPath = resolveInstalledLaunchdPlistPath("com.agent.gateway");
+    const supportRoot = path.join(fakeHome, "Library", "Application Support", "AgentGateway", "com.agent.gateway");
     expect(result.ok).toBe(true);
     expect(result.message).toBe("service started");
     expect(calls).toEqual([
@@ -89,11 +135,19 @@ describe("cli service commands", () => {
       ["kickstart", "-k", `${domain}/com.agent.gateway`]
     ]);
     const installedPlist = await fs.readFile(installedPlistPath, "utf8");
-    expect(installedPlist).toContain("<string>/bin/bash</string>");
-    expect(installedPlist).toContain("<string>-lc</string>");
-    expect(installedPlist).toContain(`cd &apos;${cwd}&apos;`);
-    expect(installedPlist).toContain("./scripts/start-with-proxy.mjs");
-    expect(fsSync.existsSync(path.join(fakeHome, "Library", "Application Support", "AgentGateway", "com.agent.gateway"))).toBe(false);
+    expect(installedPlist).toContain(`<string>${supportRoot}/launchd-wrapper.sh</string>`);
+    expect(installedPlist).not.toContain("<string>-lc</string>");
+    expect(installedPlist).not.toContain("./scripts/start-with-proxy.mjs");
+    expect(fsSync.existsSync(supportRoot)).toBe(true);
+    const managedRuntimeRoot = path.join(supportRoot, "runtime");
+    const wrapper = await fs.readFile(path.join(supportRoot, "launchd-wrapper.sh"), "utf8");
+    expect(wrapper).toContain(`RUNTIME_ROOT='${managedRuntimeRoot}'`);
+    expect(wrapper).toContain(`${supportRoot}/log-rotating-writer.sh`);
+    expect(await fs.readFile(path.join(managedRuntimeRoot, "scripts", "start-with-proxy.mjs"), "utf8")).toContain('../src/index.js');
+    expect(await fs.readFile(path.join(managedRuntimeRoot, "src", "index.js"), "utf8")).toContain('runtime ready');
+    expect(await fs.readFile(path.join(managedRuntimeRoot, "config", "channels.json"), "utf8")).toContain('"channels"');
+    expect(await fs.readFile(path.join(managedRuntimeRoot, "package.json"), "utf8")).toContain('"agent-gateway-test"');
+    expect(await fs.readFile(path.join(managedRuntimeRoot, "data", "state.json"), "utf8")).toContain('"channels"');
   });
 
   test("start tolerates already-loaded bootstrap responses", async () => {
@@ -293,5 +347,38 @@ describe("cli service commands", () => {
     const stop = await runStopCommand(["now"], { cwd, now: new Date() });
     expect(stop.ok).toBe(false);
     expect(stop.message).toContain("does not accept arguments");
+  });
+
+  test("builds a managed runtime package with only shared and configured platform dependencies", () => {
+    const manifest = buildManagedRuntimePackageManifest(
+      {
+        name: "agent-gateway",
+        dependencies: {
+          "@larksuiteoapi/node-sdk": "^1.0.0",
+          "discord.js": "^14.0.0",
+          "dotenv": "^16.0.0",
+          "https-proxy-agent": "^7.0.0",
+          "undici": "^7.0.0"
+        },
+        devDependencies: {
+          typescript: "^5.0.0"
+        }
+      },
+      {
+        FEISHU_APP_ID: "app-id",
+        FEISHU_APP_SECRET: "app-secret"
+      }
+    );
+
+    expect(manifest.dependencies).toEqual({
+      "@larksuiteoapi/node-sdk": "^1.0.0",
+      "dotenv": "^16.0.0",
+      "https-proxy-agent": "^7.0.0",
+      "undici": "^7.0.0"
+    });
+    expect(manifest.dependencies["discord.js"]).toBeUndefined();
+    expect(manifest.devDependencies).toEqual({
+      typescript: "^5.0.0"
+    });
   });
 });

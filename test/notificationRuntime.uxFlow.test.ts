@@ -624,7 +624,7 @@ describe("notification runtime ux flow cutover", () => {
       method: "turn/completed",
       params: { threadId: "thread-1" }
     });
-    await new Promise((resolve) => setTimeout(resolve, 40));
+    await new Promise((resolve) => setTimeout(resolve, 120));
 
     expect(streamedMessages).toEqual(["Streamed final answer."]);
     expect(chunkedMessages).toEqual([]);
@@ -701,7 +701,7 @@ describe("notification runtime ux flow cutover", () => {
       method: "turn/completed",
       params: { threadId: "thread-1" }
     });
-    await new Promise((resolve) => setTimeout(resolve, 40));
+    await new Promise((resolve) => setTimeout(resolve, 120));
 
     expect(streamedMessages).toEqual(["Discord prefix."]);
     expect(chunkedMessages).toEqual([" tail"]);
@@ -841,7 +841,7 @@ describe("notification runtime ux flow cutover", () => {
       method: "turn/completed",
       params: { threadId: "thread-1" }
     });
-    await new Promise((resolve) => setTimeout(resolve, 40));
+    await new Promise((resolve) => setTimeout(resolve, 120));
 
     expect(streamedMessages).toEqual(["Feishu prefix."]);
     expect(chunkedMessages).toEqual([" tail"]);
@@ -917,6 +917,142 @@ describe("notification runtime ux flow cutover", () => {
 
     expect(streamedMessages).toEqual(["Feishu dropped segment."]);
     expect(chunkedMessages).toEqual(["Feishu dropped segment."]);
+  });
+
+  test("applies configured Feishu status reactions across running, working, and done states", async () => {
+    const activeTurns = new Map<string, TurnTracker>();
+    const tracker = createTracker({ platform: "feishu" });
+    activeTurns.set("thread-1", tracker);
+    const reactions: Array<{ messageId: string; emojiType: string }> = [];
+
+    const runtime = createNotificationRuntime({
+      activeTurns,
+      renderVerbosity: "user",
+      TURN_PHASE: {
+        RUNNING: "running",
+        RECONNECTING: "reconnecting",
+        FINALIZING: "finalizing",
+        FAILED: "failed",
+        DONE: "done"
+      },
+      transitionTurnPhase: () => true,
+      normalizeCodexNotification: (notification: CodexNotification) => {
+        const { method, params } = notification;
+        if (method === "item/agentMessage/delta") {
+          return { kind: "agent_delta", threadId: params.threadId, delta: params.delta };
+        }
+        if (method === "item/started") {
+          return { kind: "item_lifecycle", threadId: params.threadId, item: params.item, state: "started" };
+        }
+        if (method === "turn/completed") {
+          return { kind: "turn_completed", threadId: params.threadId };
+        }
+        return { kind: "unknown" };
+      },
+      extractAgentMessageText: () => "",
+      maybeSendAttachmentsForItem: async () => {},
+      maybeSendInferredAttachmentsFromText: async () => 0,
+      recordFileChanges: () => {},
+      buildFileDiffSection: () => "",
+      sendChunkedToChannel: async () => {},
+      normalizeFinalSummaryText: (text: string) => text.trim(),
+      truncateStatusText: (text: string) => text,
+      isTransientReconnectErrorMessage: () => false,
+      safeSendToChannel: async () => ({ id: "feishu-message-1" }),
+      safeAddReaction: async (message: { id: string }, reaction: { emojiType: string }) => {
+        reactions.push({ messageId: message.id, emojiType: reaction.emojiType });
+        return { ok: true };
+      },
+      feishuStatusReactions: {
+        running: "EYES",
+        working: "HAMMER",
+        done: "DONE",
+        error: "SORRY"
+      },
+      feishuSegmentedStreaming: true,
+      truncateForDiscordMessage: (text: string) => text,
+      discordMaxMessageLength: 1900,
+      debugLog: () => {},
+      writeHeartbeatFile: async () => {},
+      onTurnFinalized: async () => {},
+      turnCompletionQuietMs: 5,
+      turnCompletionMaxWaitMs: 100
+    });
+
+    await runtime.handleNotification({
+      method: "item/agentMessage/delta",
+      params: { threadId: "thread-1", delta: "hello" }
+    });
+    await runtime.handleNotification({
+      method: "item/started",
+      params: { threadId: "thread-1", item: { id: "tool-1", type: "toolCall" } }
+    });
+    await runtime.handleNotification({
+      method: "item/completed",
+      params: { threadId: "thread-1", item: { id: "tool-1", type: "toolCall" } }
+    });
+    await runtime.handleNotification({
+      method: "turn/completed",
+      params: { threadId: "thread-1" }
+    });
+    await new Promise((resolve) => setTimeout(resolve, 120));
+
+    expect(reactions).toEqual([
+      { messageId: "thinking-1", emojiType: "EYES" },
+      { messageId: "thinking-1", emojiType: "HAMMER" },
+      { messageId: "thinking-1", emojiType: "DONE" }
+    ]);
+  });
+
+  test("applies configured Feishu error reaction when turn finalization fails", async () => {
+    const activeTurns = new Map<string, TurnTracker>();
+    const tracker = createTracker({ platform: "feishu" });
+    activeTurns.set("thread-1", tracker);
+    const reactions: Array<{ messageId: string; emojiType: string }> = [];
+
+    const runtime = createNotificationRuntime({
+      activeTurns,
+      renderVerbosity: "user",
+      TURN_PHASE: {
+        RUNNING: "running",
+        RECONNECTING: "reconnecting",
+        FINALIZING: "finalizing",
+        FAILED: "failed",
+        DONE: "done"
+      },
+      transitionTurnPhase: () => true,
+      normalizeCodexNotification: () => ({ kind: "unknown" }),
+      extractAgentMessageText: () => "",
+      maybeSendAttachmentsForItem: async () => {},
+      maybeSendInferredAttachmentsFromText: async () => 0,
+      recordFileChanges: () => {},
+      buildFileDiffSection: () => "",
+      sendChunkedToChannel: async () => {},
+      normalizeFinalSummaryText: (text: string) => text.trim(),
+      truncateStatusText: (text: string) => text,
+      isTransientReconnectErrorMessage: () => false,
+      safeSendToChannel: async () => ({ id: "feishu-message-1" }),
+      safeAddReaction: async (message: { id: string }, reaction: { emojiType: string }) => {
+        reactions.push({ messageId: message.id, emojiType: reaction.emojiType });
+        return { ok: true };
+      },
+      feishuStatusReactions: {
+        running: "EYES",
+        working: "HAMMER",
+        done: "DONE",
+        error: "SORRY"
+      },
+      feishuSegmentedStreaming: true,
+      truncateForDiscordMessage: (text: string) => text,
+      discordMaxMessageLength: 1900,
+      debugLog: () => {},
+      writeHeartbeatFile: async () => {},
+      onTurnFinalized: async () => {}
+    });
+
+    await runtime.finalizeTurn("thread-1", new Error("boom"));
+
+    expect(reactions).toEqual([{ messageId: "thinking-1", emojiType: "SORRY" }]);
   });
 
   test("sends Feishu final summary as a new message when status edits are unsupported", async () => {
